@@ -2,3 +2,4 @@ pandas
 requests
 line-bot-sdk
 yfinance
+matplotlib

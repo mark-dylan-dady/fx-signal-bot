@@ -51,10 +51,10 @@ df['RSI'] = 100 - (100 / (1 + rs))
 df['Signal'] = 0
 
 # 【条件】短期＞長期 ＆ 1時間足より上 ＆ 「RSIが50以上65以下（天井掴みを回避）」
-df.loc[(df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h']) & (df['RSI'] >= 50) & (df['RSI'] <= 65), 'Signal'] = 1
+df.loc[(df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h'].values) & (df['RSI'] >= 50) & (df['RSI'] <= 65), 'Signal'] = 1
 
 # 【条件】短期＜長期 ＆ 1時間足より下 ＆ 「RSIが35以上50以下（底掴みを回避）」
-df.loc[(df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h']) & (df['RSI'] >= 35) & (df['RSI'] <= 50), 'Signal'] = -1
+df.loc[(df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h'].values) & (df['RSI'] >= 35) & (df['RSI'] <= 50), 'Signal'] = -1
 
 # 前の15分足からシグナルが変化した瞬間を特定
 df['Action'] = df['Signal'].diff()

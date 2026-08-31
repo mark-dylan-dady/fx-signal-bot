@@ -2,8 +2,8 @@ name: Run FX Signal Bot
 
 on:
   schedule:
-    # 毎日日本時間の午前9時17分に自動実行します
-    - cron: '17 0 * * *'
+    # 毎日日本時間の午前9時17から17:17まで一時間ごと自動実行
+    - cron: '17 0-9 * * *'
   workflow_dispatch: # 手動でいつでも動かせるボタンを作ります
 
 jobs:

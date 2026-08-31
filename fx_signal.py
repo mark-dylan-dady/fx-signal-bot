@@ -28,32 +28,39 @@ df_1h = yf.download("AUDJPY=X", period="2mo", interval="1h")
 # 2. 上位足（1時間足）のトレンド判定（20本移動平均線）
 # ==========================================
 df_1h['SMA_Trend'] = df_1h['Close'].rolling(window=20).mean()
-# 15分足のデータに、その時刻の1時間足のトレンド情報を結合（マージ）する
 df_1h_resampled = df_1h[['SMA_Trend']].reindex(df.index, method='ffill')
 df['Trend_1h'] = df_1h_resampled['SMA_Trend']
 
 # ==========================================
-# 3. 15分足の移動平均線を計算（短期: 5本、長期: 20本）
+# 3. 15分足の移動平均線とRSI（14期間）を計算
 # ==========================================
+# 移動平均線（短期: 5本、長期: 20本）
 df['SMA_Short'] = df['Close'].rolling(window=5).mean()
 df['SMA_Long'] = df['Close'].rolling(window=20).mean()
 
+# RSIの計算
+delta = df['Close'].diff()
+gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+rs = gain / loss
+df['RSI'] = 100 - (100 / (1 + rs))
+
 # ==========================================
-# 4. チャンスを厳選する売買サイン判定ロジック
+# 4. 高確率ゾーンを厳選する売買サイン判定ロジック
 # ==========================================
 df['Signal'] = 0
 
-# 【条件変更】短期＞長期 かつ 「今の価格が1時間足の移動平均線より上（上昇トレンド）」のときだけ買いゾーン(1)
-df.loc[(df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h']), 'Signal'] = 1
+# 【条件】短期＞長期 ＆ 1時間足より上 ＆ 「RSIが50以上65以下（天井掴みを回避）」
+df.loc[(df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h']) & (df['RSI'] >= 50) & (df['RSI'] <= 65), 'Signal'] = 1
 
-# 【条件変更】短期＜長期 かつ 「今の価格が1時間足の移動平均線より下（下落トレンド）」のときだけ売りゾーン(-1に変えることで判定を明確化)
-df.loc[(df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h']), 'Signal'] = -1
+# 【条件】短期＜長期 ＆ 1時間足より下 ＆ 「RSIが35以上50以下（底掴みを回避）」
+df.loc[(df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h']) & (df['RSI'] >= 35) & (df['RSI'] <= 50), 'Signal'] = -1
 
 # 前の15分足からシグナルが変化した瞬間を特定
 df['Action'] = df['Signal'].diff()
 
 # ==========================================
-# 5. グラフの保存（クラウド環境エラー防止のため画面表示ではなく画像保存に変更）
+# 5. グラフの保存
 # ==========================================
 plt.figure(figsize=(12, 6))
 plt.plot(df.index, df['Close'], label='AUD/JPY Close', color='black', alpha=0.5)
@@ -68,48 +75,46 @@ sell_signals = df[df['Action'] == -1]
 if not sell_signals.empty:
     plt.scatter(sell_signals.index, sell_signals['Close'], marker='v', color='red', s=100, label='SELL Signal')
 
-plt.title('AUD/JPY 15m Trading Signals with 1h Trend Filter')
+plt.title('AUD/JPY 15m Signals with 1h Trend & RSI Filter')
 plt.legend()
 plt.grid()
-plt.savefig('trading_chart.png') # グラフを画像として保存
+plt.savefig('trading_chart.png')
 plt.close()
 
 # ==========================================
 # 6. 最新の判定結果とLINE送信
 # ==========================================
 latest_data = df.iloc[-1]
-previous_data = df.iloc[-2]
-
 latest_date = df.index[-1].strftime('%Y-%m-%d %H:%M')
 latest_close = latest_data['Close'].item() if hasattr(latest_data['Close'], 'item') else latest_data['Close']
+latest_rsi = latest_data['RSI'].item() if hasattr(latest_data['RSI'], 'item') else latest_data['RSI']
 latest_action_val = latest_data['Action'].item() if hasattr(latest_data['Action'], 'item') else latest_data['Action']
 
 print("\n" + "="*40)
 print(f"【データ基準時刻】: {latest_date}")
-print(f"【最新為替レート】: {latest_close:.2f} 円")
+print(f"【最新為替レート】: {latest_close:.2f} 円 / 【RSI】: {latest_rsi:.1f}")
 print("-"*40)
 
-# シグナルが「新しく発生した瞬間」を検知
 if latest_action_val != 0 and not pd.isna(latest_action_val):
     current_signal = latest_data['Signal'].item() if hasattr(latest_data['Signal'], 'item') else latest_data['Signal']
     
     if current_signal == 1:
-        msg = f"🎉 【15分足・最新サイン】買い（トレンド順張り）\n🚨時刻: {latest_date}\nレート: {latest_close:.2f}円\n上位足が上昇トレンド中のゴールデンクロスを検知しました！"
+        msg = f"🎯 【厳選サイン】買い（高確率ゾーン）\n⏰ 時刻: {latest_date}\n💰 レート: {latest_close:.2f}円 (RSI: {latest_rsi:.1f})\n上位足順張り ＆ 天井圏を避けた絶好の買いシグナルです！"
     elif current_signal == -1:
-        msg = f"🚨 【15分足・最新サイン】売り（トレンド順張り）\n🚨時刻: {latest_date}\nレート: {latest_close:.2f}円\n上位足が下落トレンド中のデッドクロスを検知しました！"
+        msg = f"🎯 【厳選サイン】売り（高確率ゾーン）\n⏰ 時刻: {latest_date}\n💰 レート: {latest_close:.2f}円 (RSI: {latest_rsi:.1f})\n上位足順張り ＆ 底値圏を避けた絶好の売りシグナルです！"
     else:
-        msg = f" ⚠️ 【15分足】サインがクリアされました（トレンド転換、またはレンジ入り）。\n時刻: {latest_date}"
+        msg = f"⚠️ 【15分足】過熱感が基準を超えた、またはトレンド変化のためサインをクリアしました。\n⏰ 時刻: {latest_date}"
 
-    print(f"信号変化（{latest_action_val}）を検知しました。LINEを送信します。")
+    print(f"信号変化（{latest_action_val}）を検知。LINEを送信します。")
     send_line_notification(msg)
 else:
-    print(f"直近の15分足シグナルに変化はありません。({latest_date})")
+    print(f"直近のシグナルに変化はありません。")
     current_signal = latest_data['Signal'].item() if hasattr(latest_data['Signal'], 'item') else latest_data['Signal']
     if current_signal == 1:
-        print("【現在の状態】安全な買いゾーン（上位足・下位足ともに上昇）")
+        print(f"【現在の状態】高確率・買いゾーン継続中 (RSI: {latest_rsi:.1f})")
     elif current_signal == -1:
-        print("【現在の状態】安全な売りゾーン（上位足・下位足ともに下落）")
+        print(f"【現在の状態】高確率・売りゾーン継続中 (RSI: {latest_rsi:.1f})")
     else:
-        print("【現在の状態】様子見ゾーン（トレンドと逆方向、または揉み合い中）")
+        print(f"【現在の状態】様子見ゾーン（揉み合い、または過熱圏内）(RSI: {latest_rsi:.1f})")
 
 print("="*40)

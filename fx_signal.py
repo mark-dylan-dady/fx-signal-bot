@@ -28,8 +28,9 @@ df_1h = yf.download("AUDJPY=X", period="2mo", interval="1h")
 # 2. 上位足（1時間足）のトレンド判定（20本移動平均線）
 # ==========================================
 df_1h['SMA_Trend'] = df_1h['Close'].rolling(window=20).mean()
-df_1h_resampled = df_1h[['SMA_Trend']].reindex(df.index, method='ffill')
-df['Trend_1h'] = df_1h_resampled['SMA_Trend']
+# 時間軸を基準に、5分足データに1時間足のSMA_Trendを安全に結合します
+df = pd.merge_asof(df.sort_index(), df_1h[['SMA_Trend']].sort_index(), left_index=True, right_index=True, direction='backward')
+df = df.rename(columns={'SMA_Trend': 'Trend_1h_aligned'})
 
 # ==========================================
 # 3. 15分足の移動平均線とRSI（14期間）を計算
@@ -50,11 +51,12 @@ df['RSI'] = 100 - (100 / (1 + rs))
 # ==========================================
 df['Signal'] = 0
 
+
 # 【条件】短期＞長期 ＆ 1時間足より上 ＆ 「RSIが50以上65以下（天井掴みを回避）」
-df.loc[(df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h'].values) & (df['RSI'] >= 50) & (df['RSI'] <= 65), 'Signal'] = 1
+df.loc[(df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h_aligned']) & (df['RSI'] >= 50) & (df['RSI'] <= 65), 'Signal'] = 1
 
 # 【条件】短期＜長期 ＆ 1時間足より下 ＆ 「RSIが35以上50以下（底掴みを回避）」
-df.loc[(df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h'].values) & (df['RSI'] >= 35) & (df['RSI'] <= 50), 'Signal'] = -1
+df.loc[(df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h_aligned']) & (df['RSI'] >= 35) & (df['RSI'] <= 50), 'Signal'] = -1
 
 # 前の15分足からシグナルが変化した瞬間を特定
 df['Action'] = df['Signal'].diff()

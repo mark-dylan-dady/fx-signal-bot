@@ -1,7 +1,7 @@
 name: Run FX Signal Bot
 
 on:
-schedule:
+  schedule:
     # 日本時間の朝9:00〜夜21:00の間、15分ごとに実行する設定です
     - cron: '0,15,30,45 0-12 * * *'
   workflow_dispatch: # 手動でいつでも動かせるボタンを作ります
@@ -19,8 +19,7 @@ jobs:
           python-version: '3.x'
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run script
         env:

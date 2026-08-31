@@ -18,23 +18,33 @@ def send_line_notification(message):
 # ==========================================
 # 1. 15分足データと、フィルター用の1時間足データを取得
 # ==========================================
+# =========================================
+# 1. データの取得（15分足と、上位足としての1時間足を両方取得）
+# =========================================
 print("為替データをダウンロード中...")
-# 15分足は過去1か月分（1mo）を取得
-df = yf.download("AUDJPY=X", period="1mo", interval="15m")
-# 上位足（1時間足）は過去2か月分を取得
-df_1h = yf.download("AUDJPY=X", period="2mo", interval="1h")
+# メインとなる15分足データを取得
+df = yf.download("AUDJPY=X", period="5d", interval="15m")
+# トレンド判定用の上位足（1時間足）データを取得
+df_1h = yf.download("AUDJPY=X", period="7d", interval="1h")
 
-# ==========================================
+# 【最重要】エラーの原因となる2重ヘッダー（マルチインデックス）を平らに直す処理
+if isinstance(df.columns, pd.MultiIndex):
+    df.columns = df.columns.droplevel(1)
+if isinstance(df_1h.columns, pd.MultiIndex):
+    df_1h.columns = df_1h.columns.droplevel(1)
+
+# =========================================
 # 2. 上位足（1時間足）のトレンド判定（20本移動平均線）
-# ==========================================
+# =========================================
 df_1h['SMA_Trend'] = df_1h['Close'].rolling(window=20).mean()
-# 時間軸を基準に、5分足データに1時間足のSMA_Trendを安全に結合します
-df = pd.merge_asof(df.sort_index(), df_1h[['SMA_Trend']].sort_index(), left_index=True, right_index=True, direction='backward')
+
+# 時間軸を基準に、15分足データに1時間足のSMA_Trendを安全に結合します
+df = pd.merge_asof(df.sort_index(), df_1h[['SMA_Trend']].sort_index(), left_index=True, right_index=True)
 df = df.rename(columns={'SMA_Trend': 'Trend_1h_aligned'})
 
-# ==========================================
+# =========================================
 # 3. 15分足の移動平均線とRSI（14期間）を計算
-# ==========================================
+# =========================================
 # 移動平均線（短期: 5本、長期: 20本）
 df['SMA_Short'] = df['Close'].rolling(window=5).mean()
 df['SMA_Long'] = df['Close'].rolling(window=20).mean()
@@ -46,11 +56,10 @@ loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
 rs = gain / loss
 df['RSI'] = 100 - (100 / (1 + rs))
 
-# ==========================================
+# =========================================
 # 4. 高確率ゾーンを厳選する売買サイン判定ロジック
-# ==========================================
+# =========================================
 df['Signal'] = 0
-
 
 # 【条件】短期＞長期 ＆ 1時間足より上 ＆ 「RSIが50以上65以下（天井掴みを回避）」
 df.loc[(df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h_aligned']) & (df['RSI'] >= 50) & (df['RSI'] <= 65), 'Signal'] = 1
@@ -60,7 +69,6 @@ df.loc[(df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h_aligned'
 
 # 前の15分足からシグナルが変化した瞬間を特定
 df['Action'] = df['Signal'].diff()
-
 # ==========================================
 # 5. グラフの保存
 # ==========================================

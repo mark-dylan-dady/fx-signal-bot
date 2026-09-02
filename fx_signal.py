@@ -5,7 +5,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 
 def send_line_notification(message):    
-    # トークンとユーザーID
+    # トークンとユーザーID（ご自身のものに差し替えてください）
     CHANNEL_ACCESS_TOKEN = 'rqISRcqCU7mstgaP1rxVVTEaVgmbWYEbTqR4HZPDqM7HuHk78/Nj9Okrq/5yhj0xqrn36a0fEcgAh/fSJdKFdq8sdDUf6aqcxCeJvodw16XlcwWqMycpV4Y37N7mru2cSFBSbkgBrtO0BKqTNUiMNQdB04t89/1O/w1cDnyilFU='
     USER_ID = 'U0e89974679349b0e3875e081aaf5f806'
 
@@ -15,19 +15,14 @@ def send_line_notification(message):
     except Exception as e:
         print(f"LINE通知に失敗しました: {e}")
 
-# ==========================================
-# 1. 15分足データと、フィルター用の1時間足データを取得
-# ==========================================
 # =========================================
-# 1. データの取得（15分足と、上位足としての1時間足を両方取得）
+# 1. データの取得（15分足と1時間足）
 # =========================================
 print("為替データをダウンロード中...")
-# メインとなる15分足データを取得
 df = yf.download("AUDJPY=X", period="5d", interval="15m")
-# トレンド判定用の上位足（1時間足）データを取得
 df_1h = yf.download("AUDJPY=X", period="7d", interval="1h")
 
-# 【最重要】エラーの原因となる2重ヘッダー（マルチインデックス）を平らに直す処理
+# マルチインデックスの平坦化
 if isinstance(df.columns, pd.MultiIndex):
     df.columns = df.columns.droplevel(1)
 if isinstance(df_1h.columns, pd.MultiIndex):
@@ -38,14 +33,13 @@ if isinstance(df_1h.columns, pd.MultiIndex):
 # =========================================
 df_1h['SMA_Trend'] = df_1h['Close'].rolling(window=20).mean()
 
-# 時間軸を基準に、15分足データに1時間足のSMA_Trendを安全に結合します
+# 15分足データに1時間足のSMA_Trendを安全に結合
 df = pd.merge_asof(df.sort_index(), df_1h[['SMA_Trend']].sort_index(), left_index=True, right_index=True)
 df = df.rename(columns={'SMA_Trend': 'Trend_1h_aligned'})
 
 # =========================================
-# 3. 15分足の移動平均線とRSI（14期間）を計算
+# 3. 15分足のテクニカル指標計算
 # =========================================
-# 移動平均線（短期: 5本、長期: 20本）
 df['SMA_Short'] = df['Close'].rolling(window=5).mean()
 df['SMA_Long'] = df['Close'].rolling(window=20).mean()
 
@@ -57,69 +51,90 @@ rs = gain / loss
 df['RSI'] = 100 - (100 / (1 + rs))
 
 # =========================================
-# 4. 高確率ゾーンを厳選する売買サイン判定ロジック
+# 4. 売買サイン判定ロジック ＆ 【追加】時間帯フィルター
 # =========================================
 df['Signal'] = 0
 
-# 【条件】短期＞長期 ＆ 1時間足より上 ＆ 「RSIが50以上65以下（天井掴みを回避）」
-df.loc[(df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h_aligned']) & (df['RSI'] >= 50) & (df['RSI'] <= 65), 'Signal'] = 1
+# 日本時間（JST）への変換処理（yfinanceのインデックスは通常UTCまたは現地時間）
+# インデックスにタイムゾーンがない場合はUTCと仮定してJSTに変換
+if df.index.tz is None:
+    df_jst = df.index.tz_localize('UTC').tz_convert('Asia/Tokyo')
+else:
+    df_jst = df.index.tz_convert('Asia/Tokyo')
 
-# 【条件】短期＜長期 ＆ 1時間足より下 ＆ 「RSIが35以上50以下（底掴みを回避）」
-df.loc[(df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h_aligned']) & (df['RSI'] >= 35) & (df['RSI'] <= 50), 'Signal'] = -1
+# 時間フィルター条件（日本時間 6:00 〜 8:59 は取引対象外にする）
+# 早朝の流動性低下によるスプレッド拡大と不規則な挙動を回避します
+is_market_active = ~((df_jst.hour >= 6) & (df_jst.hour <= 8))
+
+# 【条件】買いサイン（時間フィルターがTrueの時のみ有効）
+buy_cond = (df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h_aligned']) & (df['RSI'] >= 50) & (df['RSI'] <= 65) & is_market_active
+df.loc[buy_cond, 'Signal'] = 1
+
+# 【条件】売りサイン（時間フィルターがTrueの時のみ有効）
+sell_cond = (df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h_aligned']) & (df['RSI'] >= 35) & (df['RSI'] <= 50) & is_market_active
+df.loc[sell_cond, 'Signal'] = -1
 
 # 前の15分足からシグナルが変化した瞬間を特定
 df['Action'] = df['Signal'].diff()
-# ==========================================
-# 5. グラフの保存
-# ==========================================
-plt.figure(figsize=(12, 6))
-plt.plot(df.index, df['Close'], label='AUD/JPY Close', color='black', alpha=0.5)
-plt.plot(df.index, df['SMA_Short'], label='5-min SMA (Short)', color='blue')
-plt.plot(df.index, df['SMA_Long'], label='20-min SMA (Long)', color='orange')
-
-buy_signals = df[df['Action'] == 1]
-if not buy_signals.empty:
-    plt.scatter(buy_signals.index, buy_signals['Close'], marker='^', color='green', s=100, label='BUY Signal')
-
-sell_signals = df[df['Action'] == -1]
-if not sell_signals.empty:
-    plt.scatter(sell_signals.index, sell_signals['Close'], marker='v', color='red', s=100, label='SELL Signal')
-
-plt.title('AUD/JPY 15m Signals with 1h Trend & RSI Filter')
-plt.legend()
-plt.grid()
-plt.savefig('trading_chart.png')
-plt.close()
 
 # ==========================================
-# 6. 最新の判定結果とLINE送信
+# 5. 【改良】厳密な「確定足（1本前）」の判定処理
 # ==========================================
-latest_data = df.iloc[-1]
-latest_date = df.index[-1].strftime('%Y-%m-%d %H:%M')
-latest_close = latest_data['Close'].item() if hasattr(latest_data['Close'], 'item') else latest_data['Close']
-latest_rsi = latest_data['RSI'].item() if hasattr(latest_data['RSI'], 'item') else latest_data['RSI']
-latest_action_val = latest_data['Action'].item() if hasattr(latest_data['Action'], 'item') else latest_data['Action']
+# yfinanceの一番最後の行[-1]は、現在進行形で動いている「未確定の足」である可能性があります。
+# そのため、完全に値が固定された「1本前の足[-2]」を最新データとして扱います。
+target_data = df.iloc[-2]
+target_index_jst = df_jst[-2]  # LINE送信用に日本時間を使用
 
+latest_date = target_index_jst.strftime('%Y-%m-%d %H:%M')
+latest_close = target_data['Close'].item() if hasattr(target_data['Close'], 'item') else target_data['Close']
+latest_rsi = target_data['RSI'].item() if hasattr(target_data['RSI'], 'item') else target_data['RSI']
+latest_action_val = target_data['Action'].item() if hasattr(target_data['Action'], 'item') else target_data['Action']
+
+# ==========================================
+# 6. 最新の判定結果とLINE送信（決済目安の追加）
+# ==========================================
 print("\n" + "="*40)
-print(f"【データ基準時刻】: {latest_date}")
-print(f"【最新為替レート】: {latest_close:.2f} 円 / 【RSI】: {latest_rsi:.1f}")
+print(f"【確定データ基準時刻（JST）】: {latest_date}")
+print(f"【最新確定レート】: {latest_close:.2f} 円 / 【RSI】: {latest_rsi:.1f}")
 print("-"*40)
 
+# 目安となる利確・損切り幅（20pips = 0.20円）
+PIPS_WIDTH = 0.20
+
 if latest_action_val != 0 and not pd.isna(latest_action_val):
-    current_signal = latest_data['Signal'].item() if hasattr(latest_data['Signal'], 'item') else latest_data['Signal']
-    
+    current_signal = target_data['Signal'].item() if hasattr(target_data['Signal'], 'item') else target_data['Signal']
+   
     if current_signal == 1:
-        msg = f"🎯 【厳選サイン】買い（高確率ゾーン）\n⏰ 時刻: {latest_date}\n💰 レート: {latest_close:.2f}円 (RSI: {latest_rsi:.1f})\n上位足順張り ＆ 天井圏を避けた絶好の買いシグナルです！"
+        tp_price = latest_close + PIPS_WIDTH
+        sl_price = latest_close - PIPS_WIDTH
+        msg = (f"🎯 【厳選サイン】買い（高確率ゾーン）\n"
+               f"⏰ 時刻: {latest_date} (日本時間)\n"
+               f"💰 レート: {latest_close:.2f}円 (RSI: {latest_rsi:.1f})\n"
+               f"ーーー\n"
+               f"📈 利確目安(TP): {tp_price:.2f}円\n"
+               f"📉 損切目安(SL): {sl_price:.2f}円\n"
+               f"ーーー\n"
+               f"上位足順張り ＆ 天井圏を避けた絶好の買いシグナルです！")
+               
     elif current_signal == -1:
-        msg = f"🎯 【厳選サイン】売り（高確率ゾーン）\n⏰ 時刻: {latest_date}\n💰 レート: {latest_close:.2f}円 (RSI: {latest_rsi:.1f})\n上位足順張り ＆ 底値圏を避けた絶好の売りシグナルです！"
+        tp_price = latest_close - PIPS_WIDTH
+        sl_price = latest_close + PIPS_WIDTH
+        msg = (f"🎯 【厳選サイン】売り（高確率ゾーン）\n"
+               f"⏰ 時刻: {latest_date} (日本時間)\n"
+               f"💰 レート: {latest_close:.2f}円 (RSI: {latest_rsi:.1f})\n"
+               f"ーーー\n"
+               f"📈 利確目安(TP): {tp_price:.2f}円\n"
+               f"📉 損切目安(SL): {sl_price:.2f}円\n"
+               f"ーーー\n"
+               f"上位足順張り ＆ 底値圏を避けた絶好の売りシグナルです！")
     else:
-        msg = f"⚠️ 【15分足】過熱感が基準を超えた、またはトレンド変化のためサインをクリアしました。\n⏰ 時刻: {latest_date}"
+        msg = f"⚠️ 【15分足】過熱感が基準を超えた、またはトレンド変化のためサインをクリアしました。\n⏰ 時刻: {latest_date} (日本時間)"
 
     print(f"信号変化（{latest_action_val}）を検知。LINEを送信します。")
     send_line_notification(msg)
 else:
     print(f"直近のシグナルに変化はありません。")
-    current_signal = latest_data['Signal'].item() if hasattr(latest_data['Signal'], 'item') else latest_data['Signal']
+    current_signal = target_data['Signal'].item() if hasattr(target_data['Signal'], 'item') else target_data['Signal']
     if current_signal == 1:
         print(f"【現在の状態】高確率・買いゾーン継続中 (RSI: {latest_rsi:.1f})")
     elif current_signal == -1:
@@ -128,3 +143,4 @@ else:
         print(f"【現在の状態】様子見ゾーン（揉み合い、または過熱圏内）(RSI: {latest_rsi:.1f})")
 
 print("="*40)
+

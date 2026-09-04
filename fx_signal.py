@@ -5,27 +5,27 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 
 def send_line_notification(message, image_url=None):
-# LINEのトークンとユーザーID
-CHANNEL_ACCESS_TOKEN = 'rqISRcqCU7mstgaP1rxVVTEaVgmbWYEbTqR4HZPDqM7HuHk78/Nj9Okrq/5yhj0xqrn36a0fEcgAh/fSJdKFdq8sdDUf6aqcxCeJvodw16XlcwWqMycpV4Y37N7mru2cSFBSbkgBrtO0BKqTNUiMNQdB04t89/1O/w1cDnyilFU='
-USER_ID = 'U0e89974679349b0e3875e081aaf5f806'
+    # LINEのトークンとユーザーID
+    CHANNEL_ACCESS_TOKEN = 'rqISRcqCU7mstgaP1rxVVTEaVgmbWYEbTqR4HZPDqM7HuHk78/Nj9Okrq/5yhj0xqrn36a0fEcgAh/fSJdKFdq8sdDUf6aqcxCeJvodw16XlcwWqMycpV4Y37N7mru2cSFBSbkgBrtO0BKqTNUiMNQdB04t89/1O/w1cDnyilFU='
+    USER_ID = 'U0e89974679349b0e3875e081aaf5f806'
 
-try:
-line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+    try:
+        line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 
-# 1. まず判定テキストメッセージを送信
-line_bot_api.push_message(USER_ID, messages=TextSendMessage(text=message))
+        # 1. まず判定テキストメッセージを送信
+        line_bot_api.push_message(USER_ID, messages=TextSendMessage(text=message))
 
-# 2. 画像URLが指定されている場合は、続けて最新チャート画像を送信
-if image_url:
-image_message = ImageSendMessage(
-original_content_url=image_url,
-preview_image_url=image_url
-)
-line_bot_api.push_message(USER_ID, messages=image_message)
-print("LINEへの最新チャート画像添付に成功しました。")
+        # 2. 画像URLが指定されている場合は、続けて最新チャート画像を送信
+        if image_url:
+            image_message = ImageSendMessage(
+              original_content_url=image_url,
+              preview_image_url=image_url
+            )
+            line_bot_api.push_message(USER_ID, messages=image_message)
+            print("LINEへの最新チャート画像添付に成功しました。")
 
-except Exception as e:
-print(f"LINE通知に失敗しました: {e}")
+    except Exception as e:
+        print(f"LINE通知に失敗しました: {e}")
 
 # =========================================
 # 1. データの取得（15分足と1時間足）

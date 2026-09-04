@@ -119,7 +119,7 @@ if latest_action_val != 0 and not pd.isna(latest_action_val):
                f"📉 SL: {sl_price:.2f}")
     else:
         msg = f"⚠️ Signal Cleared\n⏰ Time: {latest_date} (JST)"
-	time.sleep(5)
+		time.sleep(5)
     send_line_notification(msg, image_url=IMAGE_PUBLIC_URL)
 	
 else:

@@ -3,6 +3,7 @@ from linebot.models import TextSendMessage, ImageSendMessage
 import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
+import time
 
 def send_line_notification(message, image_url=None):
     CHANNEL_ACCESS_TOKEN = 'rqISRcqCU7mstgaP1rxVVTEaVgmbWYEbTqR4HZPDqM7HuHk78/Nj9Okrq/5yhj0xqrn36a0fEcgAh/fSJdKFdq8sdDUf6aqcxCeJvodw16XlcwWqMycpV4Y37N7mru2cSFBSbkgBrtO0BKqTNUiMNQdB04t89/1O/w1cDnyilFU='
@@ -118,6 +119,8 @@ if latest_action_val != 0 and not pd.isna(latest_action_val):
                f"📉 SL: {sl_price:.2f}")
     else:
         msg = f"⚠️ Signal Cleared\n⏰ Time: {latest_date} (JST)"
+	time.sleep)5)	
     send_line_notification(msg, image_url=IMAGE_PUBLIC_URL)
+	
 else:
     print("No signal change.")

@@ -92,7 +92,7 @@ print(f"JST: {latest_date} / Close: {latest_close:.2f} / RSI: {latest_rsi:.1f}")
 
 GITHUB_USER = 'mark-dylan-daddy'
 GITHUB_REPO = 'fx-signal-bot'
-IMAGE_PUBLIC_URL = f"https://githubusercontent.com{GITHUB_USER}/{GITHUB_REPO}/main/{chart_filename}"
+IMAGE_PUBLIC_URL = f"https://githubusercontent.com{GITHUB_USER}/{GITHUB_REPO}/master/{chart_filename}"
 
 PIPS_WIDTH = 0.20
 

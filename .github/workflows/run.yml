@@ -1,27 +1,44 @@
-name: Run FX Signal Bot
+name: AUDJPY Signal Bot
 
 on:
   schedule:
-    # 日本時間の朝9:00〜夜21:00の間、15分ごとに実行する設定です
-    - cron: '0,15,30,45 0-12 * * *'
-  workflow_dispatch: # 手動でいつでも動かせるボタンを作ります
+    # 日本時間の毎時 0分、15分、30分、45分 に自動実行（最速15分間隔）
+    # ※GitHub側の混雑状況により、数分程度の起動遅延が発生する場合があります
+    - cron: '0,15,30,45 * * * *'
+  workflow_dispatch: # 手動でいつでも実行できるボタンを残す
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    
+    # 画像をGitHubに自動保存（プッシュ）するために必要な書き込み権限を追加
+    permissions:
+      contents: write
+
     steps:
-      - name: Check out repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.10'
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas yfinance matplotlib line-bot-sdk
 
-      - name: Run script
-        env:
-          TZ: 'Asia/Tokyo'
-        run: python fx_signal.py
+      - name: Run Trading Bot
+        run: python bot.py
+
+      # 【最重要】作成したチャート画像を自動的にGitHubリポジトリへコミット＆保存する処理
+      - name: Commit and Push Chart Image
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add trading_chart.png
+          # 画像に変更がある場合のみ保存し、変更がなければエラーにせずスキップする
+          git commit -m "Update trading chart image" || exit 0
+          git push
+

@@ -132,6 +132,6 @@ if latest_action_val != 0 and not pd.isna(latest_action_val):
         print(f"Git push failed from Python: {git_err}")
 
     time.sleep(5)
-send_line_notification(msg, image_url=IMAGE_PUBLIC_URL)
-else:
+
+
     print("No signal change.")

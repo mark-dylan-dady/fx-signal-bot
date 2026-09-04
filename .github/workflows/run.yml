@@ -30,7 +30,7 @@ jobs:
           pip install pandas yfinance matplotlib line-bot-sdk
 
       - name: Run Trading Bot
-        run: python bot.py
+        run: python fx_signal.py
 
       # 【最重要】作成したチャート画像を自動的にGitHubリポジトリへコミット＆保存する処理
       - name: Commit and Push Chart Image

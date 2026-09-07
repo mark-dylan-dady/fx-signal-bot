@@ -4,8 +4,7 @@ import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import time
-import subprocess
-import numpy as np
+import requests
 
 def send_line_notification(message, image_url=None):    
     CHANNEL_ACCESS_TOKEN = 'rqISRcqCU7mstgaP1rxVVTEaVgmbWYEbTqR4HZPDqM7HuHk78/Nj9Okrq/5yhj0xqrn36a0fEcgAh/fSJdKFdq8sdDUf6aqcxCeJvodw16XlcwWqMycpV4Y37N7mru2cSFBSbkgBrtO0BKqTNUiMNQdB04t89/1O/w1cDnyilFU='
@@ -19,6 +18,23 @@ def send_line_notification(message, image_url=None):
             print("Success: Image sent to LINE.")
     except Exception as e:
         print(f"Error: LINE notification failed: {e}")
+
+def upload_to_imgur(image_path):
+    # LINEが確実に読み込める画像リンクを生成するための無料公開システムキー
+    CLIENT_ID = '840e6c518aa2f89'
+    headers = {"Authorization": f"Client-ID {CLIENT_ID}"}
+    try:
+        with open(image_path, "rb") as f:
+            image_data = f.read()
+        response = requests.post("https://imgur.com", headers=headers, files={"image": image_data})
+        if response.status_code == 200:
+            return response.json()["data"]["link"]
+        else:
+            print(f"Imgur upload failed: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"Imgur error: {e}")
+        return None
 
 print("Downloading data...")
 df = yf.download("AUDJPY=X", period="5d", interval="15m")
@@ -42,7 +58,7 @@ loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
 rs = gain / loss
 df['RSI'] = 100 - (100 / (1 + rs))
 
-# --- ATR (ボラティリティ) の計算ロジックを追加 ---
+# --- ATR (ボラティリティ) の計算 ---
 high_low = df['High'] - df['Low']
 high_close = (df['High'] - df['Close'].shift()).abs()
 low_close = (df['Low'] - df['Close'].shift()).abs()
@@ -98,19 +114,14 @@ latest_close = target_data['Close'].item() if hasattr(target_data['Close'], 'ite
 latest_rsi = target_data['RSI'].item() if hasattr(target_data['RSI'], 'item') else target_data['RSI']
 latest_action_val = target_data['Action'].item() if hasattr(target_data['Action'], 'item') else target_data['Action']
 
-# 現在の市場の激しさに応じたATR値を取得
 current_atr = target_data['ATR'].item() if hasattr(target_data['ATR'], 'item') else target_data['ATR']
 if pd.isna(current_atr) or current_atr <= 0:
-    current_atr = 0.20 # 万が一計算できない場合の安全用初期値
+    current_atr = 0.20 
 
-# 【変更点】直近の平均値幅の1.5倍を自動で利確・損切り幅（可変ピップス）にする
+# 市場の値動きに応じて利確・損切り幅（可変幅）を自動算出
 dynamic_width = round(current_atr * 1.5, 2)
 
 print(f"JST: {latest_date} / Close: {latest_close:.2f} / RSI: {latest_rsi:.1f} / Dynamic Width: {dynamic_width:.2f}")
-
-GITHUB_USER = 'mark-dylan-daddy' 
-GITHUB_REPO = 'fx-signal-bot'
-IMAGE_PUBLIC_URL = f"https://githubusercontent.com{GITHUB_USER}/{GITHUB_REPO}/master/{chart_filename}"
 
 if latest_action_val != 0 and not pd.isna(latest_action_val):
     current_signal = target_data['Signal'].item() if hasattr(target_data['Signal'], 'item') else target_data['Signal']
@@ -121,7 +132,7 @@ if latest_action_val != 0 and not pd.isna(latest_action_val):
                f"⏰ Time: {latest_date} (JST)\n"
                f"💰 Rate: {latest_close:.2f} (RSI: {latest_rsi:.1f})\n"
                f"---\n"
-               f"📊 Width: {dynamic_width:.2f}円\n"
+               f"📊 Width: {dynamic_width:.2f}JPY\n"
                f"📈 TP: {tp_price:.2f}\n"
                f"📉 SL: {sl_price:.2f}")
     elif current_signal == -1:
@@ -131,23 +142,19 @@ if latest_action_val != 0 and not pd.isna(latest_action_val):
                f"⏰ Time: {latest_date} (JST)\n"
                f"💰 Rate: {latest_close:.2f} (RSI: {latest_rsi:.1f})\n"
                f"---\n"
-               f"📊 Width: {dynamic_width:.2f}円\n"
+               f"📊 Width: {dynamic_width:.2f}JPY\n"
                f"📈 TP: {tp_price:.2f}\n"
                f"📉 SL: {sl_price:.2f}")
     else:
         msg = f"⚠️ Signal Cleared\n⏰ Time: {latest_date} (JST)"
     
-    try:
-        subprocess.run(["git", "config", "--local", "user.email", "actions@github.com"], check=True)
-        subprocess.run(["git", "config", "--local", "user.name", "GitHub Actions"], check=True)
-        subprocess.run(["git", "add", "trading_chart.png"], check=True)
-        subprocess.run(["git", "commit", "-m", "Update trading chart image"], check=False)
-        subprocess.run(["git", "push"], check=True)
-        print("Success: Image pushed to GitHub from Python.")
-    except Exception as git_err:
-        print(f"Git push failed from Python: {git_err}")
+    # 独自の高速転送でLINE用URLを生成
+    public_image_url = upload_to_imgur(chart_filename)
+    if public_image_url:
+        print(f"Imgur URL Generation Success: {public_image_url}")
+    else:
+        print("Imgur URL Generation Failed.")
 
-    time.sleep(5)
-    send_line_notification(msg, image_url=IMAGE_PUBLIC_URL)
+    send_line_notification(msg, image_url=public_image_url)
 else:
     print("No signal change.")

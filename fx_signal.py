@@ -5,36 +5,34 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import time
 import requests
+import json
 
-def send_line_notification(message, image_url=None):    
+def send_line_notification_with_blob(message, image_path):    
     CHANNEL_ACCESS_TOKEN = 'rqISRcqCU7mstgaP1rxVVTEaVgmbWYEbTqR4HZPDqM7HuHk78/Nj9Okrq/5yhj0xqrn36a0fEcgAh/fSJdKFdq8sdDUf6aqcxCeJvodw16XlcwWqMycpV4Y37N7mru2cSFBSbkgBrtO0BKqTNUiMNQdB04t89/1O/w1cDnyilFU='
     USER_ID = 'U0e89974679349b0e3875e081aaf5f806'
+    
     try:
         line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
         line_bot_api.push_message(USER_ID, messages=TextSendMessage(text=message))
-        if image_url:
-            image_message = ImageSendMessage(original_content_url=image_url, preview_image_url=image_url)
-            line_bot_api.push_message(USER_ID, messages=image_message)
-            print("Success: Image sent to LINE.")
-    except Exception as e:
-        print(f"Error: LINE notification failed: {e}")
-
-def upload_to_imgur(image_path):
-    # LINEが確実に読み込める画像リンクを生成するための無料公開システムキー
-    CLIENT_ID = '840e6c518aa2f89'
-    headers = {"Authorization": f"Client-ID {CLIENT_ID}"}
-    try:
+        
+        # LINE公式のアップロードサーバーへバイナリとして直接画像を送信してフォトエラーを回避
+        url = "https://line.me"
+        headers = {
+            "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
+            "Content-Type": "image/png"
+        }
+        
         with open(image_path, "rb") as f:
             image_data = f.read()
-        response = requests.post("https://imgur.com", headers=headers, files={"image": image_data})
+            
+        response = requests.post(url, headers=headers, data=image_data)
         if response.status_code == 200:
-            return response.json()["data"]["link"]
+            print("Success: Image content uploaded directly to LINE Server.")
         else:
-            print(f"Imgur upload failed: {response.status_code}")
-            return None
+            print(f"LINE Blob upload failed: {response.status_code} - {response.text}")
+            
     except Exception as e:
-        print(f"Imgur error: {e}")
-        return None
+        print(f"Error: LINE notification failed: {e}")
 
 print("Downloading data...")
 df = yf.download("AUDJPY=X", period="5d", interval="15m")
@@ -58,7 +56,7 @@ loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
 rs = gain / loss
 df['RSI'] = 100 - (100 / (1 + rs))
 
-# --- ATR (ボラティリティ) の計算 ---
+# ATR (直近14本の平均値幅 = 変動の激しさ) の計算
 high_low = df['High'] - df['Low']
 high_close = (df['High'] - df['Close'].shift()).abs()
 low_close = (df['Low'] - df['Close'].shift()).abs()
@@ -74,10 +72,16 @@ else:
 
 is_market_active = ~((df_jst.hour >= 6) & (df_jst.hour <= 8))
 
-buy_cond = (df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h_aligned']) & (df['RSI'] >= 53) & (df['RSI'] <= 65) & is_market_active
+# 【最重要】大荒れ相場フィルターのロジック
+# 今の15分足の値幅(tr)が、過去14本の平均値幅(ATR)の2.0倍を超えて大暴れしている時は取引しない
+is_market_too_wild = tr > (df['ATR'] * 2.0)
+
+# 【勝率重視】買い条件（相場が大荒れしていない時だけ有効）
+buy_cond = (df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h_aligned']) & (df['RSI'] >= 53) & (df['RSI'] <= 65) & is_market_active & (~is_market_too_wild)
 df.loc[buy_cond, 'Signal'] = 1
 
-sell_cond = (df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h_aligned']) & (df['RSI'] >= 35) & (df['RSI'] <= 48) & is_market_active
+# 【勝率重視】売り条件（相場が大荒れしていない時だけ有効）
+sell_cond = (df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h_aligned']) & (df['RSI'] >= 35) & (df['RSI'] <= 48) & is_market_active & (~is_market_too_wild)
 df.loc[sell_cond, 'Signal'] = -1
 
 df['Action'] = df['Signal'].diff()
@@ -96,7 +100,7 @@ sell_signals = df_plot[df_plot['Action'] == -1]
 if not sell_signals.empty:
     plt.scatter(sell_signals.index, sell_signals['Close'], marker='v', color='crimson', s=120, label='SELL', zorder=5)
 
-plt.title('AUD/JPY 15m Dynamic Volatility Chart', fontsize=12)
+plt.title('AUD/JPY 15m Safe Filter Chart', fontsize=12)
 plt.grid(True, linestyle='--', alpha=0.5)
 plt.legend(loc='upper left')
 plt.xticks(rotation=15)
@@ -118,7 +122,6 @@ current_atr = target_data['ATR'].item() if hasattr(target_data['ATR'], 'item') e
 if pd.isna(current_atr) or current_atr <= 0:
     current_atr = 0.20 
 
-# 市場の値動きに応じて利確・損切り幅（可変幅）を自動算出
 dynamic_width = round(current_atr * 1.5, 2)
 
 print(f"JST: {latest_date} / Close: {latest_close:.2f} / RSI: {latest_rsi:.1f} / Dynamic Width: {dynamic_width:.2f}")
@@ -128,7 +131,7 @@ if latest_action_val != 0 and not pd.isna(latest_action_val):
     if current_signal == 1:
         tp_price = latest_close + dynamic_width
         sl_price = latest_close - dynamic_width
-        msg = (f"🎯 BUY Signal (Volatility Adjusted)\n"
+        msg = (f"🎯 BUY Signal (Safe Trend)\n"
                f"⏰ Time: {latest_date} (JST)\n"
                f"💰 Rate: {latest_close:.2f} (RSI: {latest_rsi:.1f})\n"
                f"---\n"
@@ -138,7 +141,7 @@ if latest_action_val != 0 and not pd.isna(latest_action_val):
     elif current_signal == -1:
         tp_price = latest_close - dynamic_width
         sl_price = latest_close + dynamic_width
-        msg = (f"🎯 SELL Signal (Volatility Adjusted)\n"
+        msg = (f"🎯 SELL Signal (Safe Trend)\n"
                f"⏰ Time: {latest_date} (JST)\n"
                f"💰 Rate: {latest_close:.2f} (RSI: {latest_rsi:.1f})\n"
                f"---\n"
@@ -148,13 +151,7 @@ if latest_action_val != 0 and not pd.isna(latest_action_val):
     else:
         msg = f"⚠️ Signal Cleared\n⏰ Time: {latest_date} (JST)"
     
-    # 独自の高速転送でLINE用URLを生成
-    public_image_url = upload_to_imgur(chart_filename)
-    if public_image_url:
-        print(f"Imgur URL Generation Success: {public_image_url}")
-    else:
-        print("Imgur URL Generation Failed.")
-
-    send_line_notification(msg, image_url=public_image_url)
+    time.sleep(5)
+    send_line_notification_with_blob(msg, chart_filename)
 else:
     print("No signal change.")

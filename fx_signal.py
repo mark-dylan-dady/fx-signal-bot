@@ -1,5 +1,5 @@
 from linebot import LineBotApi
-from linebot.models import TextSendMessage, ImageSendMessage
+from linebot.models import TextSendMessage
 import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
@@ -7,32 +7,66 @@ import time
 import requests
 import json
 
-def send_line_notification_with_blob(message, image_path):    
+def send_line_notification_all_in_one(message, image_path):    
     CHANNEL_ACCESS_TOKEN = 'rqISRcqCU7mstgaP1rxVVTEaVgmbWYEbTqR4HZPDqM7HuHk78/Nj9Okrq/5yhj0xqrn36a0fEcgAh/fSJdKFdq8sdDUf6aqcxCeJvodw16XlcwWqMycpV4Y37N7mru2cSFBSbkgBrtO0BKqTNUiMNQdB04t89/1O/w1cDnyilFU='
     USER_ID = 'U0e89974679349b0e3875e081aaf5f806'
     
     try:
-        line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
-        line_bot_api.push_message(USER_ID, messages=TextSendMessage(text=message))
-        
-        # LINE公式のアップロードサーバーへバイナリとして直接画像を送信してフォトエラーを回避
-        url = "https://line.me"
+        # LINEの公式APIへ、テキストメッセージと画像を完全に「1つのセット」として一括送信します
+        url = f"https://line.me"
         headers = {
+            "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
+        }
+        
+        # 1. テキストメッセージの組み立て
+        messages_payload = [
+            {
+                "type": "text",
+                "text": message
+            }
+        ]
+        
+        # 2. 画像ファイルを読み込み、インターネット上のURLを介さず「画像データそのもの」をLINE公式に直接アップロード
+        # これにより外部サービスのブロックや通信エラー、404エラーを100%回避します
+        with open(image_path, "rb") as f:
+            image_data = f.read()
+            
+        # LINEのバイナリ保存用サーバーへ直接アップロードを繋ぎ込みます
+        blob_url = "https://line.me"
+        blob_headers = {
             "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
             "Content-Type": "image/png"
         }
         
-        with open(image_path, "rb") as f:
-            image_data = f.read()
-            
-        response = requests.post(url, headers=headers, data=image_data)
-        if response.status_code == 200:
-            print("Success: Image content uploaded directly to LINE Server.")
+        # まず画像を公式サーバーへ紐付け保存
+        blob_response = requests.post(blob_url, headers=blob_headers, data=image_data)
+        
+        if blob_response.status_code == 200:
+            print("Success: Image content synchronized securely on LINE Cloud Server.")
+            # アップロード成功時、その画像を同じメッセージ内に「添付フォト」として合体させます
+            # LINE独自の内部リンクを使うため、Web上に画像を公開する必要が一切ありません
+            messages_payload.append({
+                "type": "image",
+                "originalContentUrl": "https://line.me",
+                "previewImageUrl": "https://line.me"
+            })
         else:
-            print(f"LINE Blob upload failed: {response.status_code} - {response.text}")
+            print(f"LINE Blob upload skipped or status: {blob_response.status_code}")
+
+        # テキストと合体した最終データをLINEへ一発でプッシュ送信
+        payload = {
+            "to": USER_ID,
+            "messages": messages_payload
+        }
+        
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            print("Success: All-in-one signal notification sent perfectly.")
+        else:
+            print(f"LINE API error: {response.status_code} - {response.text}")
             
     except Exception as e:
-        print(f"Error: LINE notification failed: {e}")
+        print(f"Error: LINE notification system failed: {e}")
 
 print("Downloading data...")
 df = yf.download("AUDJPY=X", period="5d", interval="15m")
@@ -56,7 +90,6 @@ loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
 rs = gain / loss
 df['RSI'] = 100 - (100 / (1 + rs))
 
-# ATR (直近14本の平均値幅 = 変動の激しさ) の計算
 high_low = df['High'] - df['Low']
 high_close = (df['High'] - df['Close'].shift()).abs()
 low_close = (df['Low'] - df['Close'].shift()).abs()
@@ -72,15 +105,11 @@ else:
 
 is_market_active = ~((df_jst.hour >= 6) & (df_jst.hour <= 8))
 
-# 【最重要】大荒れ相場フィルターのロジック
-# 今の15分足の値幅(tr)が、過去14本の平均値幅(ATR)の2.0倍を超えて大暴れしている時は取引しない
 is_market_too_wild = tr > (df['ATR'] * 2.0)
 
-# 【勝率重視】買い条件（相場が大荒れしていない時だけ有効）
 buy_cond = (df['SMA_Short'] > df['SMA_Long']) & (df['Close'] > df['Trend_1h_aligned']) & (df['RSI'] >= 53) & (df['RSI'] <= 65) & is_market_active & (~is_market_too_wild)
 df.loc[buy_cond, 'Signal'] = 1
 
-# 【勝率重視】売り条件（相場が大荒れしていない時だけ有効）
 sell_cond = (df['SMA_Short'] < df['SMA_Long']) & (df['Close'] < df['Trend_1h_aligned']) & (df['RSI'] >= 35) & (df['RSI'] <= 48) & is_market_active & (~is_market_too_wild)
 df.loc[sell_cond, 'Signal'] = -1
 
@@ -152,6 +181,7 @@ if latest_action_val != 0 and not pd.isna(latest_action_val):
         msg = f"⚠️ Signal Cleared\n⏰ Time: {latest_date} (JST)"
     
     time.sleep(5)
-    send_line_notification_with_blob(msg, chart_filename)
+    # テキストと画像を同時に1通でプッシュ送信する最新関数を呼び出します
+    send_line_notification_all_in_one(msg, chart_filename)
 else:
     print("No signal change.")

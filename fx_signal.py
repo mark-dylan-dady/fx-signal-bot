@@ -185,3 +185,14 @@ if latest_action_val != 0 and not pd.isna(latest_action_val):
     send_line_notification_all_in_one(msg, chart_filename)
 else:
     print("No signal change.")
+
+# 【追加ルール】100%完璧なシグナルじゃなくても、惜しい時に「もうすぐだよ！」とLINE実況する新機能
+near_buy = (df['SMA_Short'] > df['SMA_Long']) & (df['RSI'] >= 48) & (df['RSI'] < 53)
+near_sell = (df['SMA_Short'] < df['SMA_Long']) & (df['RSI'] > 48) & (df['RSI'] <= 52)
+
+if near_buy.iloc[-1]:
+    msg = f"👀 まーくん、もうすぐ【買い】シグナルが出そうだよ！\n現在の価格: {latest_close:.2f}円\n（RSIが{latest_rsi:.1f}まで上がってきたから準備してね！）」"
+    send_line_notification_all_in_one(msg, chart_filename)
+elif near_sell.iloc[-1]:
+    msg = f"👀 まーくん、もうすぐ【売り】シグナルが出そうだよ！\n現在の価格: {latest_close:.2f}円\n（チャンスが近いからチャートの写真を送るね！）」"
+    send_line_notification_all_in_one(msg, chart_filename)

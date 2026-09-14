@@ -196,3 +196,9 @@ if near_buy.iloc[-1]:
 elif near_sell.iloc[-1]:
     msg = f"👀 まーくん、もうすぐ【売り】シグナルが出そうだよ！\n現在の価格: {latest_close:.2f}円\n（チャンスが近いからチャートの写真を送るね！）」"
     send_line_notification_all_in_one(msg, chart_filename)
+    
+# 🇺🇸 【アメリカ経済指標・売上ニュースの自動パトロール部屋】
+# 明日の夜9時30分（15:30 UTC = 21:30 JST）になったら、まーくんのスマホに現在の戦況を1秒で自動実況します！
+if latest_action_val == 0 and target_index_jst.hour == 21 and target_index_jst.minute == 30:
+    msg = f"🇺🇸 まーくん！アメリカの重要な売上ニュース（小売売上高）が今出たよ！\n現在の豪ドル円は 【{latest_close:.2f}円】 だよ！\nこれから社会の変化の波（トレンド）が走り出すかもしれないから、一緒に見守ろうね！🏎️💨"
+    send_line_notification_all_in_one(msg, chart_filename)

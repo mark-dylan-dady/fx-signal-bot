@@ -2,13 +2,16 @@ name: AUDJPY Signal Bot
 
 on:
   schedule:
-    # 日本時間の毎時 0分、15分、30分、45分 に自動実行（最速15分間隔）
     - cron: '0,15,30,45 * * * *'
-  workflow_dispatch: # 手動実行ボタン
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    
+    # 画像更新をGitHubに書き込むための権限
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Repository
@@ -26,3 +29,11 @@ jobs:
 
       - name: Run Trading Bot
         run: python fx_signal.py
+
+      - name: Commit and Push Chart Image
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add trading_chart.png
+          git commit -m "Update trading chart image" || exit 0
+          git push

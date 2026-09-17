@@ -9,7 +9,7 @@ load_dotenv()
 CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 USER_ID = os.getenv("LINE_USER_ID")
 
-# 手動実行フラグの取得（GitHub Actions等から渡される）
+# 手動実行フラグの取得
 IS_MANUAL_RUN = os.getenv("IS_MANUAL_RUN", "false").lower() == "true"
 
 
@@ -40,8 +40,8 @@ def send_line_notification(message):
         return False
 
 
-# 1. データの取得
-df = yf.download("AUDJPY=X", period="5d", interval="5m")
+# 1. データの取得（1分足 と 1時間足）
+df = yf.download("AUDJPY=X", period="1d", interval="1m")
 df_1h = yf.download("AUDJPY=X", period="7d", interval="1h")
 
 if isinstance(df.columns, pd.MultiIndex):
@@ -49,7 +49,7 @@ if isinstance(df.columns, pd.MultiIndex):
 if isinstance(df_1h.columns, pd.MultiIndex):
     df_1h.columns = df_1h.columns.droplevel(1)
 
-# 2. 上位足（1時間足）のトレンドと「傾き」を判定
+# 2. 上位足（1時間足）のトレンド判定（大波の方向）
 df_1h["SMA_Trend"] = df_1h["Close"].rolling(window=20).mean()
 df_1h["SMA_Slope"] = df_1h["SMA_Trend"].diff()
 
@@ -60,7 +60,7 @@ df = pd.merge_asof(
     right_index=True,
 )
 
-# 3. テクニカル指標計算
+# 3. 1分足のテクニカル指標計算（高速トリガー）
 df["SMA_Short"] = df["Close"].rolling(window=5).mean()
 df["SMA_Long"] = df["Close"].rolling(window=20).mean()
 
@@ -76,38 +76,41 @@ low_close = (df["Low"] - df["Close"].shift()).abs()
 tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
 df["ATR"] = tr.rolling(window=14).mean()
 
-# 4. サイン判定
+# 4. サイン判定（1分足ベース）
 df["Signal"] = 0
 if df.index.tz is None:
     df_jst = df.index.tz_localize("UTC").tz_convert("Asia/Tokyo")
 else:
     df_jst = df.index.tz_convert("Asia/Tokyo")
 
+# 早朝のボラティリティ低い時間を除外
 is_market_active = ~((df_jst.hour >= 6) & (df_jst.hour <= 8))
 
+# 買い条件: 1時間足が上昇 ＆ 1分足で短期が中期を上抜け・RSI適正範囲
 buy_cond = (
     (df["SMA_Short"] > df["SMA_Long"])
     & (df["Close"] > df["SMA_Trend"])
     & (df["SMA_Slope"] > 0)
-    & (df["RSI"] >= 53)
+    & (df["RSI"] >= 50)
     & (df["RSI"] <= 65)
     & is_market_active
 )
 df.loc[buy_cond, "Signal"] = 1
 
+# 売り条件: 1時間足が下落 ＆ 1分足で短期が中期を下抜け・RSI適正範囲
 sell_cond = (
     (df["SMA_Short"] < df["SMA_Long"])
     & (df["Close"] < df["SMA_Trend"])
     & (df["SMA_Slope"] < 0)
     & (df["RSI"] >= 35)
-    & (df["RSI"] <= 48)
+    & (df["RSI"] <= 50)
     & is_market_active
 )
 df.loc[sell_cond, "Signal"] = -1
 
 df["Action"] = df["Signal"].diff()
 
-# 5. リアルタイム判定＆通知
+# 5. リアルタイム判定＆通知（確定直前の1分足）
 target_data = df.iloc[-2]
 target_index_jst = df_jst[-2]
 
@@ -138,27 +141,25 @@ current_signal = (
     else target_data["Signal"]
 )
 
-dynamic_tp_width = latest_atr * 2.0
-dynamic_sl_width = latest_atr * 1.5
+# 1分足向け：薄利多売用に利確・損切り幅をタイトに設定（ATRの1.0倍 / 1.2倍）
+dynamic_tp_width = latest_atr * 1.0
+dynamic_sl_width = latest_atr * 1.2
 
-# シグナル判定
 signal_sent = False
 
 if current_signal == 1 and latest_action_val > 0:
     tp_price = latest_close + dynamic_tp_width
     sl_price = latest_close - dynamic_sl_width
     msg = (
-        f"🎯 【厳選通知】買いシグナル（5分足確定）\n"
+        f"⚡ 【1分足スキャル】買いシグナル\n"
         f"⏰ 時刻: {latest_date}\n"
         f"💰 レート: {latest_close:.2f}円\n"
         f"──────────────\n"
-        f"📊 【市場条件】\n"
-        f"・1時間足: 上昇トレンド（右肩上がり）\n"
-        f"・過熱感(RSI): {latest_rsi:.1f}\n"
-        f"・直近ボラ(ATR): {latest_atr:.3f}円\n"
+        f"📊 【条件】1時間足上昇 ＋ 1分足ブレイク\n"
+        f"・RSI: {latest_rsi:.1f} / ATR: {latest_atr:.3f}円\n"
         f"──────────────\n"
-        f"📈 可変利確目安(TP): {tp_price:.2f}円 (+{dynamic_tp_width:.2f})\n"
-        f"📉 可変損切目安(SL): {sl_price:.2f}円 (-{dynamic_sl_width:.2f})"
+        f"📈 薄利TP目安: {tp_price:.2f}円 (+{dynamic_tp_width:.2f})\n"
+        f"📉 タイトSL目安: {sl_price:.2f}円 (-{dynamic_sl_width:.2f})"
     )
     send_line_notification(msg)
     signal_sent = True
@@ -167,28 +168,25 @@ elif current_signal == -1 and latest_action_val < 0:
     tp_price = latest_close - dynamic_tp_width
     sl_price = latest_close + dynamic_sl_width
     msg = (
-        f"🎯 【厳選通知】売りシグナル（5分足確定）\n"
+        f"⚡ 【1分足スキャル】売りシグナル\n"
         f"⏰ 時刻: {latest_date}\n"
         f"💰 レート: {latest_close:.2f}円\n"
         f"──────────────\n"
-        f"📊 【市場条件】\n"
-        f"・1時間足: 下落トレンド（右肩下がり）\n"
-        f"・過熱感(RSI): {latest_rsi:.1f}\n"
-        f"・直近ボラ(ATR): {latest_atr:.3f}円\n"
+        f"📊 【条件】1時間足下落 ＋ 1分足ブレイク\n"
+        f"・RSI: {latest_rsi:.1f} / ATR: {latest_atr:.3f}円\n"
         f"──────────────\n"
-        f"📈 可変利確目安(TP): {tp_price:.2f}円 (-{dynamic_tp_width:.2f})\n"
-        f"📉 可変損切目安(SL): {sl_price:.2f}円 (+{dynamic_sl_width:.2f})"
+        f"📈 薄利TP目安: {tp_price:.2f}円 (-{dynamic_tp_width:.2f})\n"
+        f"📉 タイトSL目安: {sl_price:.2f}円 (+{dynamic_sl_width:.2f})"
     )
     send_line_notification(msg)
     signal_sent = True
 
-# 手動実行時かつシグナルが出ていない場合にヘルスチェック通知を送信
+# 手動実行用テスト通知
 if IS_MANUAL_RUN and not signal_sent:
     test_msg = (
-        f"🔧 【手動テスト】動作確認完了\n"
-        f"⏰ 確認時刻: {latest_date}\n"
-        f"💰 現在レート: {latest_close:.2f}円\n"
-        f"📊 現在RSI: {latest_rsi:.1f}\n"
+        f"🔧 【手動テスト】1分足モード動作確認\n"
+        f"⏰ 時刻: {latest_date}\n"
+        f"💰 レート: {latest_close:.2f}円 / RSI: {latest_rsi:.1f}\n"
         f"💡 シグナルなし（正常稼働中）"
     )
     send_line_notification(test_msg)

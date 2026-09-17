@@ -4,17 +4,20 @@ import requests
 import yfinance as yf
 from dotenv import load_dotenv
 
-# .env ファイルから環境変数を読み込み
 load_dotenv()
 
-# 環境変数からトークンとユーザーIDを取得
 CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 USER_ID = os.getenv("LINE_USER_ID")
+
+# 手動実行フラグの取得（GitHub Actions等から渡される）
+IS_MANUAL_RUN = os.getenv("IS_MANUAL_RUN", "false").lower() == "true"
 
 
 def send_line_notification(message):
     if not CHANNEL_ACCESS_TOKEN or not USER_ID:
-        print("エラー: LINE_CHANNEL_ACCESS_TOKEN または LINE_USER_ID が設定されていません。")
+        print(
+            "エラー: LINE_CHANNEL_ACCESS_TOKEN または LINE_USER_ID が設定されていません。"
+        )
         return False
 
     url = "https://api.line.me/v2/bot/message/push"
@@ -37,7 +40,7 @@ def send_line_notification(message):
         return False
 
 
-# 1. データの取得（5分足・1時間足）
+# 1. データの取得
 df = yf.download("AUDJPY=X", period="5d", interval="5m")
 df_1h = yf.download("AUDJPY=X", period="7d", interval="1h")
 
@@ -57,7 +60,7 @@ df = pd.merge_asof(
     right_index=True,
 )
 
-# 3. テクニカル指標計算（SMA, RSI, ATR）
+# 3. テクニカル指標計算
 df["SMA_Short"] = df["Close"].rolling(window=5).mean()
 df["SMA_Long"] = df["Close"].rolling(window=20).mean()
 
@@ -82,7 +85,6 @@ else:
 
 is_market_active = ~((df_jst.hour >= 6) & (df_jst.hour <= 8))
 
-# 買い条件
 buy_cond = (
     (df["SMA_Short"] > df["SMA_Long"])
     & (df["Close"] > df["SMA_Trend"])
@@ -93,7 +95,6 @@ buy_cond = (
 )
 df.loc[buy_cond, "Signal"] = 1
 
-# 売り条件
 sell_cond = (
     (df["SMA_Short"] < df["SMA_Long"])
     & (df["Close"] < df["SMA_Trend"])
@@ -107,8 +108,8 @@ df.loc[sell_cond, "Signal"] = -1
 df["Action"] = df["Signal"].diff()
 
 # 5. リアルタイム判定＆通知
-target_data = df.iloc[-1]
-target_index_jst = df_jst[-1]
+target_data = df.iloc[-2]
+target_index_jst = df_jst[-2]
 
 latest_date = target_index_jst.strftime("%Y-%m-%d %H:%M")
 latest_close = (
@@ -131,56 +132,66 @@ latest_action_val = (
     if hasattr(target_data["Action"], "item")
     else target_data["Action"]
 )
+current_signal = (
+    target_data["Signal"].item()
+    if hasattr(target_data["Signal"], "item")
+    else target_data["Signal"]
+)
 
 dynamic_tp_width = latest_atr * 2.0
 dynamic_sl_width = latest_atr * 1.5
 
-if latest_action_val != 0 and not pd.isna(latest_action_val):
-    current_signal = (
-        target_data["Signal"].item()
-        if hasattr(target_data["Signal"], "item")
-        else target_data["Signal"]
+# シグナル判定
+signal_sent = False
+
+if current_signal == 1 and latest_action_val > 0:
+    tp_price = latest_close + dynamic_tp_width
+    sl_price = latest_close - dynamic_sl_width
+    msg = (
+        f"🎯 【厳選通知】買いシグナル（5分足確定）\n"
+        f"⏰ 時刻: {latest_date}\n"
+        f"💰 レート: {latest_close:.2f}円\n"
+        f"──────────────\n"
+        f"📊 【市場条件】\n"
+        f"・1時間足: 上昇トレンド（右肩上がり）\n"
+        f"・過熱感(RSI): {latest_rsi:.1f}\n"
+        f"・直近ボラ(ATR): {latest_atr:.3f}円\n"
+        f"──────────────\n"
+        f"📈 可変利確目安(TP): {tp_price:.2f}円 (+{dynamic_tp_width:.2f})\n"
+        f"📉 可変損切目安(SL): {sl_price:.2f}円 (-{dynamic_sl_width:.2f})"
     )
-
-    if current_signal == 1:
-        tp_price = latest_close + dynamic_tp_width
-        sl_price = latest_close - dynamic_sl_width
-
-        msg = (
-            f"🎯 【厳選通知】買いシグナル（5分足）\n"
-            f"⏰ 時刻: {latest_date}\n"
-            f"💰 レート: {latest_close:.2f}円\n"
-            f"──────────────\n"
-            f"📊 【市場条件】\n"
-            f"・1時間足: 上昇トレンド（右肩上がり）\n"
-            f"・過熱感(RSI): {latest_rsi:.1f}\n"
-            f"・直近ボラ(ATR): {latest_atr:.3f}円\n"
-            f"──────────────\n"
-            f"📈 可変利確目安(TP): {tp_price:.2f}円 (+{dynamic_tp_width:.2f})\n"
-            f"📉 可変損切目安(SL): {sl_price:.2f}円 (-{dynamic_sl_width:.2f})"
-        )
-
-    elif current_signal == -1:
-        tp_price = latest_close - dynamic_tp_width
-        sl_price = latest_close + dynamic_sl_width
-
-        msg = (
-            f"🎯 【厳選通知】売りシグナル（5分足）\n"
-            f"⏰ 時刻: {latest_date}\n"
-            f"💰 レート: {latest_close:.2f}円\n"
-            f"──────────────\n"
-            f"📊 【市場条件】\n"
-            f"・1時間足: 下落トレンド（右肩下がり）\n"
-            f"・過熱感(RSI): {latest_rsi:.1f}\n"
-            f"・直近ボラ(ATR): {latest_atr:.3f}円\n"
-            f"──────────────\n"
-            f"📈 可変利確目安(TP): {tp_price:.2f}円 (-{dynamic_tp_width:.2f})\n"
-            f"📉 可変損切目安(SL): {sl_price:.2f}円 (+{dynamic_sl_width:.2f})"
-        )
-
-    else:
-        msg = f"⚠️ 【5分足】トレンド鈍化または過熱によりサイン解除\n⏰ 時刻: {latest_date}"
-
     send_line_notification(msg)
-else:
-    print("シグナル変化なし")
+    signal_sent = True
+
+elif current_signal == -1 and latest_action_val < 0:
+    tp_price = latest_close - dynamic_tp_width
+    sl_price = latest_close + dynamic_sl_width
+    msg = (
+        f"🎯 【厳選通知】売りシグナル（5分足確定）\n"
+        f"⏰ 時刻: {latest_date}\n"
+        f"💰 レート: {latest_close:.2f}円\n"
+        f"──────────────\n"
+        f"📊 【市場条件】\n"
+        f"・1時間足: 下落トレンド（右肩下がり）\n"
+        f"・過熱感(RSI): {latest_rsi:.1f}\n"
+        f"・直近ボラ(ATR): {latest_atr:.3f}円\n"
+        f"──────────────\n"
+        f"📈 可変利確目安(TP): {tp_price:.2f}円 (-{dynamic_tp_width:.2f})\n"
+        f"📉 可変損切目安(SL): {sl_price:.2f}円 (+{dynamic_sl_width:.2f})"
+    )
+    send_line_notification(msg)
+    signal_sent = True
+
+# 手動実行時かつシグナルが出ていない場合にヘルスチェック通知を送信
+if IS_MANUAL_RUN and not signal_sent:
+    test_msg = (
+        f"🔧 【手動テスト】動作確認完了\n"
+        f"⏰ 確認時刻: {latest_date}\n"
+        f"💰 現在レート: {latest_close:.2f}円\n"
+        f"📊 現在RSI: {latest_rsi:.1f}\n"
+        f"💡 シグナルなし（正常稼働中）"
+    )
+    send_line_notification(test_msg)
+    print("手動実行テスト通知を送信しました。")
+elif not signal_sent:
+    print("新規エントリーシグナルなし")

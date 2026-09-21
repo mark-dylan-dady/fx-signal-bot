@@ -111,24 +111,34 @@ df["Action"] = df["Signal"].diff()
 # 5. シグナル結果の検証機能（過去のシグナルが成功したか判定）
 def verify_past_signals(history_df, market_df):
     updated = False
+
+    # market_df のインデックスをタイムゾーンなし（JST）に統一
+    m_df = market_df.copy()
+    if m_df.index.tz is not None:
+        m_df.index = m_df.index.tz_convert("Asia/Tokyo").tz_localize(None)
+
     for idx, row in history_df.iterrows():
         if row["Result"] != "Pending":
             continue
 
+        # 保存されているタイムスタンプを naive (JST) な datetime に変換
         sig_time = pd.to_datetime(row["Timestamp"])
+        if sig_time.tzinfo is not None:
+            sig_time = sig_time.tz_convert("Asia/Tokyo").tz_localize(None)
+
         sig_type = row["Type"]
-        entry_price = row["Entry"]
-        tp = row["TP"]
-        sl = row["SL"]
+        entry_price = float(row["Entry"])
+        tp = float(row["TP"])
+        sl = float(row["SL"])
 
         # シグナル発生以降の5分足データを取得（最大30本分 = 2.5時間分）
-        future_data = market_df[market_df.index > sig_time].head(30)
+        future_data = m_df[m_df.index > sig_time].head(30)
         if future_data.empty:
             continue
 
         for _, f_row in future_data.iterrows():
-            high = f_row["High"]
-            low = f_row["Low"]
+            high = float(f_row["High"])
+            low = float(f_row["Low"])
 
             if sig_type == "BUY":
                 if high >= tp:
@@ -197,11 +207,11 @@ if current_signal == 1 and latest_action_val > 0:
     tp_price = latest_close + dynamic_tp_width
     sl_price = latest_close - dynamic_sl_width
 
-    # CSV追加
+    # CSV追加（JST表記で保存）
     new_row = pd.DataFrame(
         [
             {
-                "Timestamp": df.index[-2],
+                "Timestamp": target_index_jst.strftime("%Y-%m-%d %H:%M:%S"),
                 "Type": "BUY",
                 "Entry": latest_close,
                 "TP": tp_price,
@@ -231,11 +241,11 @@ elif current_signal == -1 and latest_action_val < 0:
     tp_price = latest_close - dynamic_tp_width
     sl_price = latest_close + dynamic_sl_width
 
-    # CSV追加
+    # CSV追加（JST表記で保存）
     new_row = pd.DataFrame(
         [
             {
-                "Timestamp": df.index[-2],
+                "Timestamp": target_index_jst.strftime("%Y-%m-%d %H:%M:%S"),
                 "Type": "SELL",
                 "Entry": latest_close,
                 "TP": tp_price,

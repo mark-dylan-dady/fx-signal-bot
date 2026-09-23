@@ -74,6 +74,10 @@ low_close = (df["Low"] - df["Close"].shift()).abs()
 tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
 df["ATR"] = tr.rolling(window=14).mean()
 
+# 直近ブレイクアウト判定用（過去3本の高値/安値）
+df["High_Max3"] = df["High"].shift(1).rolling(window=3).max()
+df["Low_Min3"] = df["Low"].shift(1).rolling(window=3).min()
+
 # 4. サイン判定
 df["Signal"] = 0
 if df.index.tz is None:
@@ -83,24 +87,26 @@ else:
 
 is_market_active = ~((df_jst.hour >= 6) & (df_jst.hour <= 8))
 
-# 買い条件（5分足）
+# 買い条件（条件を厳格化）
 buy_cond = (
     (df["SMA_Short"] > df["SMA_Long"])
     & (df["Close"] > df["SMA_Trend"])
     & (df["SMA_Slope"] > 0)
-    & (df["RSI"] >= 50)
-    & (df["RSI"] <= 65)
+    & (df["RSI"] >= 52)
+    & (df["RSI"] <= 68)
+    & (df["Close"] > df["High_Max3"])  # 直近3本の高値を更新
     & is_market_active
 )
 df.loc[buy_cond, "Signal"] = 1
 
-# 売り条件（5分足）
+# 売り条件（条件を厳格化）
 sell_cond = (
     (df["SMA_Short"] < df["SMA_Long"])
     & (df["Close"] < df["SMA_Trend"])
     & (df["SMA_Slope"] < 0)
-    & (df["RSI"] >= 35)
-    & (df["RSI"] <= 50)
+    & (df["RSI"] >= 32)
+    & (df["RSI"] <= 48)
+    & (df["Close"] < df["Low_Min3"])  # 直近3本の安値を更新
     & is_market_active
 )
 df.loc[sell_cond, "Signal"] = -1
@@ -108,11 +114,10 @@ df.loc[sell_cond, "Signal"] = -1
 df["Action"] = df["Signal"].diff()
 
 
-# 5. シグナル結果の検証機能（過去のシグナルが成功したか判定）
+# 5. シグナル結果の検証機能
 def verify_past_signals(history_df, market_df):
     updated = False
 
-    # market_df のインデックスをタイムゾーンなし（JST）に統一
     m_df = market_df.copy()
     if m_df.index.tz is not None:
         m_df.index = m_df.index.tz_convert("Asia/Tokyo").tz_localize(None)
@@ -121,18 +126,16 @@ def verify_past_signals(history_df, market_df):
         if row["Result"] != "Pending":
             continue
 
-        # 保存されているタイムスタンプを naive (JST) な datetime に変換
         sig_time = pd.to_datetime(row["Timestamp"])
         if sig_time.tzinfo is not None:
             sig_time = sig_time.tz_convert("Asia/Tokyo").tz_localize(None)
 
         sig_type = row["Type"]
-        entry_price = float(row["Entry"])
         tp = float(row["TP"])
         sl = float(row["SL"])
 
-        # シグナル発生以降の5分足データを取得（最大30本分 = 2.5時間分）
-        future_data = m_df[m_df.index > sig_time].head(30)
+        # 判定期間を少し長めに設定（最大48本分 = 4時間分）
+        future_data = m_df[m_df.index > sig_time].head(48)
         if future_data.empty:
             continue
 
@@ -198,8 +201,9 @@ latest_atr = float(target_data["ATR"])
 latest_action_val = float(target_data["Action"])
 current_signal = int(target_data["Signal"])
 
-dynamic_tp_width = latest_atr * 1.5
-dynamic_sl_width = latest_atr * 1.2
+# TP/SL幅の拡大（最低0.08円＝8pip以上の幅を保証）
+dynamic_tp_width = max(latest_atr * 2.2, 0.10)
+dynamic_sl_width = max(latest_atr * 1.8, 0.08)
 
 signal_sent = False
 
@@ -207,7 +211,6 @@ if current_signal == 1 and latest_action_val > 0:
     tp_price = latest_close + dynamic_tp_width
     sl_price = latest_close - dynamic_sl_width
 
-    # CSV追加（JST表記で保存）
     new_row = pd.DataFrame(
         [
             {
@@ -241,7 +244,6 @@ elif current_signal == -1 and latest_action_val < 0:
     tp_price = latest_close - dynamic_tp_width
     sl_price = latest_close + dynamic_sl_width
 
-    # CSV追加（JST表記で保存）
     new_row = pd.DataFrame(
         [
             {

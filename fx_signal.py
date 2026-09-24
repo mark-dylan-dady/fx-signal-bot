@@ -288,3 +288,64 @@ if IS_MANUAL_RUN and not signal_sent:
     print("手動実行テスト通知を送信しました。")
 elif not signal_sent:
     print(f"新規シグナルなし (現在の過去検証勝率: {win_rate:.1f}%)")
+
+# ==========================================
+# バックテスト実行関数（過去データでの検証）
+# ==========================================
+def run_backtest(df):
+    trades = []
+    
+    # データを1行ずつスキャンしてシグナルを探す
+    for i in range(len(df) - 48): # 判定用に後方48本残す
+        row = df.iloc[i]
+        
+        if row["Signal"] == 0 or pd.isna(row["Action"]) or row["Action"] == 0:
+            continue
+            
+        entry_time = df.index[i]
+        entry_price = row["Close"]
+        atr = row["ATR"]
+        sig_type = "BUY" if row["Signal"] == 1 else "SELL"
+        
+        # ★ここでTP/SLの倍率を調整して実験できます
+        tp = entry_price + (atr * 1.2) if sig_type == "BUY" else entry_price - (atr * 1.2)
+        sl = entry_price - (atr * 1.5) if sig_type == "BUY" else entry_price + (atr * 1.5)
+        
+        # エントリー後の未来48本（4時間分）の動きを検証
+        future_df = df.iloc[i+1 : i+49]
+        result = "PENDING"
+        
+        for _, f_row in future_df.iterrows():
+            high = f_row["High"]
+            low = f_row["Low"]
+            
+            if sig_type == "BUY":
+                if high >= tp:
+                    result = "WIN"
+                    break
+                elif low <= sl:
+                    result = "LOSE"
+                    break
+            elif sig_type == "SELL":
+                if low <= tp:
+                    result = "WIN"
+                    break
+                elif high >= sl:
+                    result = "LOSE"
+                    break
+        
+        if result in ["WIN", "LOSE"]:
+            trades.append(result)
+            
+    total = len(trades)
+    wins = trades.count("WIN")
+    win_rate = (wins / total * 100) if total > 0 else 0
+    
+    print("\n========== 【バックテスト結果】 ==========")
+    print(f"総トレード数: {total}件")
+    print(f"勝ち: {wins}件 / 負け: {trades.count('LOSE')}件")
+    print(f"過去検証勝率: {win_rate:.1f}%")
+    print("==========================================")
+
+# バックテストの実行
+run_backtest(df)

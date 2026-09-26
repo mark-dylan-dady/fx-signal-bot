@@ -39,8 +39,8 @@ def send_line_notification(message):
 
 
 # 1. データの取得（5分足 & 1時間足）
-df = yf.download("AUDJPY=X", period="5d", interval="5m")
-df_1h = yf.download("AUDJPY=X", period="14d", interval="1h")
+df = yf.download("AUDJPY=X", period="60d", interval="5m")
+df_1h = yf.download("AUDJPY=X", period="730d", interval="1h")
 
 if isinstance(df.columns, pd.MultiIndex):
     df.columns = df.columns.droplevel(1)
@@ -85,7 +85,9 @@ if df.index.tz is None:
 else:
     df_jst = df.index.tz_convert("Asia/Tokyo")
 
-is_market_active = ~((df_jst.hour >= 6) & (df_jst.hour <= 8))
+# is_market_active = ~((df_jst.hour >= 6) & (df_jst.hour <= 8))
+# 変更後（21時以降、または午前6時未満の「動く時間帯」だけに限定）
+is_market_active = (df_jst.hour >= 21) | (df_jst.hour < 6)
 
 # 買い条件（条件を厳格化）
 buy_cond = (
@@ -201,10 +203,14 @@ latest_atr = float(target_data["ATR"])
 latest_action_val = float(target_data["Action"])
 current_signal = int(target_data["Signal"])
 
-# TP/SL幅の拡大（最低0.08円＝8pip以上の幅を保証）
-dynamic_tp_width = max(latest_atr * 2.2, 0.10)
-dynamic_sl_width = max(latest_atr * 1.8, 0.08)
+# TP/SL幅の拡大（最低0.05円＝5pip以上の幅を保証）
+# dynamic_tp_width = max(latest_atr * 2.2, 0.10)
+dynamic_tp_width = max(latest_atr * 0.8, 0.05)
+dynamic_sl_width = max(latest_atr * 1.5, 0.08)
 
+# 変更後（利確をATR×1.0倍〜1.2倍に落として、手堅く勝率重視にする）
+#dynamic_tp_width = max(latest_atr * 1.0, 0.05)
+#dynamic_sl_width = max(latest_atr * 1.5, 0.08)
 signal_sent = False
 
 if current_signal == 1 and latest_action_val > 0:
@@ -307,9 +313,17 @@ def run_backtest(df):
         atr = row["ATR"]
         sig_type = "BUY" if row["Signal"] == 1 else "SELL"
         
-        # ★ここでTP/SLの倍率を調整して実験できます
-        tp = entry_price + (atr * 1.2) if sig_type == "BUY" else entry_price - (atr * 1.2)
-        sl = entry_price - (atr * 1.5) if sig_type == "BUY" else entry_price + (atr * 1.5)
+     # ★ここでTP/SLの倍率を調整して実験できます（倍率を変更する場所）
+        tp = (
+            entry_price + (atr * 0.8)
+            if sig_type == "BUY"
+            else entry_price - (atr * 0.8)
+        )
+        sl = (
+            entry_price - (atr * 1.5)
+            if sig_type == "BUY"
+            else entry_price + (atr * 1.5)
+        )
         
         # エントリー後の未来48本（4時間分）の動きを検証
         future_df = df.iloc[i+1 : i+49]

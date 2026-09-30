@@ -15,13 +15,13 @@ CSV_FILE = "signals_history.csv"
 # ==========================================
 # 設定（ここだけ変えれば、本番もバックテストも同じ条件になります）
 # ==========================================
-TP_ATR_MULT = 0.8    # 利確幅 = ATR × この倍率
-SL_ATR_MULT = 1.5    # 損切幅 = ATR × この倍率
+TP_ATR_MULT = 1.3    # 利確幅 = ATR × この倍率
+SL_ATR_MULT = 1.3    # 損切幅 = ATR × この倍率
 MIN_TP_WIDTH = 0.05  # 利確幅の最低値（円）＝5pips
 MIN_SL_WIDTH = 0.08  # 損切幅の最低値（円）＝8pips
 MAX_BARS = 48        # エントリー後、何本(=4時間)まで様子を見るか
 COST_YEN = 0.005     # 1回の取引コスト(スプレッド)の想定：0.5pips。業者に合わせて変更
-
+MIN_SLOPE = 0.03   # 1時間でこれ以上動いている時だけ「トレンドあり」と判定
 
 def send_line_notification(message):
     if not CHANNEL_ACCESS_TOKEN or not USER_ID:
@@ -174,9 +174,9 @@ is_market_active = (df_jst.hour >= 21) | (df_jst.hour < 6)
 buy_cond = (
     (df["SMA_Short"] > df["SMA_Long"])
     & (df["Close"] > df["SMA_Trend"])
-    & (df["SMA_Slope"] > 0)
-    & (df["RSI"] >= 52)
-    & (df["RSI"] <= 68)
+    & (df["SMA_Slope"] > MIN_SLOPE)
+    & (df["RSI"] >= 55)
+    & (df["RSI"] <= 65)
     & (df["Close"] > df["High_Max3"])  # 直近3本の高値を更新
     & is_market_active
 )
@@ -186,9 +186,9 @@ df.loc[buy_cond, "Signal"] = 1
 sell_cond = (
     (df["SMA_Short"] < df["SMA_Long"])
     & (df["Close"] < df["SMA_Trend"])
-    & (df["SMA_Slope"] < 0)
-    & (df["RSI"] >= 32)
-    & (df["RSI"] <= 48)
+    & (df["SMA_Slope"] < -MIN_SLOPE)
+    & (df["RSI"] >= 35)
+    & (df["RSI"] <= 45)
     & (df["Close"] < df["Low_Min3"])  # 直近3本の安値を更新
     & is_market_active
 )

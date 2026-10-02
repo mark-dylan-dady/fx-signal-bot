@@ -116,7 +116,7 @@ def summarize(result_df):
 
 
 # 1. データの取得（5分足 & 1時間足）
-df = yf.download("AUDJPY=X", period="60d", interval="5m")
+df = yf.download("EURJPY=X", period="60d", interval="5m")
 df_1h = yf.download("AUDJPY=X", period="730d", interval="1h")
 
 if isinstance(df.columns, pd.MultiIndex):

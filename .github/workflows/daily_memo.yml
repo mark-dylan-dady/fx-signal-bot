@@ -1,0 +1,25 @@
+name: Daily Memo
+
+on:
+  schedule:
+    - cron: '0 22 * * *'   # 毎日 日本時間の朝7:00 (UTC 22:00)
+  workflow_dispatch:        # Actionsタブから手動で「今すぐ実行」もできる
+
+jobs:
+  memo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas requests yfinance python-dotenv
+
+      - name: Send morning memo
+        run: python daily_memo.py
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}

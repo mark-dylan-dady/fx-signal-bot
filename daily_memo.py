@@ -1,4 +1,3 @@
-
 """毎朝のLINE相場メモ
 
 シグナルが出ない日も、毎朝LINEに「今の相場の様子」と
@@ -94,6 +93,15 @@ def load_market(pair):
     return df
 
 
+def rsi_label(kind, low, high, rsi):
+    """RSIが帯に入っていない理由(高すぎ/低すぎ)が分かる文言"""
+    if rsi > high:
+        return f"RSI高すぎ(今{rsi:.1f}・{kind}帯{low}-{high})"
+    if rsi < low:
+        return f"RSI低すぎ(今{rsi:.1f}・{kind}帯{low}-{high})"
+    return f"RSIが{kind}帯({low}-{high})に入る(今{rsi:.1f})"
+
+
 def analyze(df):
     """直近の確定した5分足から、今の相場の様子をまとめる"""
     row = df.iloc[-2]
@@ -115,14 +123,14 @@ def analyze(df):
         ("5分足の短期線が長期線の上", short_above),
         ("1時間足トレンドの上", close > trend),
         ("1時間足の傾きが上向き", slope > MIN_SLOPE),
-        (f"RSIが買い帯({RSI_BUY_LOW}-{RSI_BUY_HIGH})に入る(今{rsi:.1f})", RSI_BUY_LOW <= rsi <= RSI_BUY_HIGH),
+        (rsi_label("買い", RSI_BUY_LOW, RSI_BUY_HIGH, rsi), RSI_BUY_LOW <= rsi <= RSI_BUY_HIGH),
         ("直近3本の高値を更新", close > float(row["High_Max3"])),
     ]
     sell = [
         ("5分足の短期線が長期線の下", not short_above),
         ("1時間足トレンドの下", close < trend),
         ("1時間足の傾きが下向き", slope < -MIN_SLOPE),
-        (f"RSIが売り帯({RSI_SELL_LOW}-{RSI_SELL_HIGH})に入る(今{rsi:.1f})", RSI_SELL_LOW <= rsi <= RSI_SELL_HIGH),
+        (rsi_label("売り", RSI_SELL_LOW, RSI_SELL_HIGH, rsi), RSI_SELL_LOW <= rsi <= RSI_SELL_HIGH),
         ("直近3本の安値を更新", close < float(row["Low_Min3"])),
     ]
 
@@ -208,9 +216,9 @@ def scoreboard(pairs):
         wins = int((done["Result"] == "WIN").sum())
         loses = int((done["Result"] == "LOSE").sum())
         pips = float(done["PnL"].sum() * 100) if n else 0.0
-        filled = min(10, -(-n * 10 // SAMPLE_GOAL))  # 1件でもあれば最低1マス点灯（切り上げ）
-        lines.append(f"{name} {'🟦' * filled}{'⬜' * (10 - filled)} {n}/{SAMPLE_GOAL}件")
-        lines.append(f"  勝{wins}負{loses} 合計{pips:+.1f}pips")
+        filled = min(5, -(-n * 5 // SAMPLE_GOAL))  # 1件でもあれば最低1マス点灯（切り上げ）
+        lines.append(f"{name} {n}/{SAMPLE_GOAL}件")
+        lines.append(f"{'🟦' * filled}{'⬜' * (5 - filled)} 勝{wins}負{loses} {pips:+.1f}pips")
 
         if h["Time"].notna().any():
             t = h["Time"].max()

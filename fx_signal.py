@@ -1,4 +1,5 @@
 import os
+
 import pandas as pd
 import requests
 import yfinance as yf
@@ -11,7 +12,7 @@ USER_ID = os.getenv("LINE_USER_ID")
 IS_MANUAL_RUN = os.getenv("IS_MANUAL_RUN", "false").lower() == "true"
 
 # ==========================================
-# 設定（現時点のベスト設定。テスト7回目で反映）
+# 設定（現時点のベスト設定）
 # ==========================================
 TP_ATR_MULT = 1.3
 SL_ATR_MULT = 1.3
@@ -23,9 +24,21 @@ MIN_SLOPE = 0.03
 RSI_BUY_LOW, RSI_BUY_HIGH = 55, 65
 RSI_SELL_LOW, RSI_SELL_HIGH = 37, 43
 
-# 【今回追加】EURJPYを監視対象に追加（USDJPYは成績が悪いため除外）
-# AUDJPYは引き続き本番、EURJPYはサンプルを貯めるための並行監視
+# 監視する通貨ペア（USDJPYは成績が悪いため除外）
 PAIRS = ["AUDJPY=X", "EURJPY=X"]
+
+# ==========================================
+# 見逃し回収の設定
+# GitHubの定期実行は間隔が空くことがあるため、実行のたびに
+# 「直近の足をさかのぼって」シグナルを探し、記録していないものを回収します。
+# ==========================================
+LOOKBACK_HOURS = 24         # 通常は直近24時間をさかのぼって調べる
+FIRST_LOOKBACK_HOURS = 72   # 記録ファイルがまだ無い最初の1回だけ、3日分さかのぼる
+LIVE_MINUTES = 20           # この分数以内に出たシグナルは「リアルタイム」扱い
+MAX_LATE_LINES = 8          # 見逃し回収の通知に載せる最大件数
+
+HISTORY_COLUMNS = ["Timestamp", "Type", "Entry", "TP", "SL", "RSI", "ATR", "Result", "PnL"]
+NUM_COLUMNS = ["Entry", "TP", "SL", "RSI", "ATR", "PnL"]
 
 
 def send_line_notification(message):
@@ -39,7 +52,7 @@ def send_line_notification(message):
     }
     payload = {"to": USER_ID, "messages": [{"type": "text", "text": message}]}
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
         if response.status_code == 200:
             print("【成功】LINE通知を送信しました。")
             return True
@@ -66,7 +79,7 @@ def judge_trade(sig_type, entry, tp, sl, future_df):
             hit_tp, hit_sl = high >= tp, low <= sl
         else:
             hit_tp, hit_sl = low <= tp, high >= sl
-        if hit_sl:
+        if hit_sl:  # 同じ足でTPとSLの両方に触れた場合は負け扱い
             return "LOSE", -abs(entry - sl) - COST_YEN
         if hit_tp:
             return "WIN", abs(tp - entry) - COST_YEN
@@ -99,6 +112,7 @@ def build_signals(pair):
     if isinstance(df_1h.columns, pd.MultiIndex):
         df_1h.columns = df_1h.columns.droplevel(1)
 
+    # 1時間足のトレンド（未来の情報が混ざらないよう1本ずらす）
     df_1h["SMA_Trend"] = df_1h["Close"].rolling(window=20).mean()
     df_1h["SMA_Slope"] = df_1h["SMA_Trend"].diff()
     df_1h[["SMA_Trend", "SMA_Slope"]] = df_1h[["SMA_Trend", "SMA_Slope"]].shift(1)
@@ -160,8 +174,24 @@ def build_signals(pair):
     return df, df_jst
 
 
+# ==========================================
+# 履歴CSVの読み書き
+# ==========================================
+def load_history(csv_file):
+    if os.path.exists(csv_file):
+        h = pd.read_csv(csv_file)
+    else:
+        h = pd.DataFrame(columns=HISTORY_COLUMNS)
+    for col in HISTORY_COLUMNS:
+        if col not in h.columns:
+            h[col] = float("nan") if col in NUM_COLUMNS else ""
+    for col in NUM_COLUMNS:
+        h[col] = pd.to_numeric(h[col], errors="coerce")
+    return h[HISTORY_COLUMNS].copy()
+
+
 def verify_past_signals(history_df, market_df):
-    updated = False
+    """結果待ち(Pending)のシグナルを、その後の値動きで判定し直す"""
     m_df = market_df.copy()
     if m_df.index.tz is not None:
         m_df.index = m_df.index.tz_convert("Asia/Tokyo").tz_localize(None)
@@ -170,93 +200,173 @@ def verify_past_signals(history_df, market_df):
         if row["Result"] != "Pending":
             continue
         sig_time = pd.to_datetime(row["Timestamp"])
-        if sig_time.tzinfo is not None:
-            sig_time = sig_time.tz_convert("Asia/Tokyo").tz_localize(None)
-
         future_data = m_df[m_df.index > sig_time].head(MAX_BARS)
         if future_data.empty:
             continue
-
-        result, pnl = judge_trade(row["Type"], float(row["Entry"]), float(row["TP"]), float(row["SL"]), future_data)
+        result, pnl = judge_trade(
+            row["Type"], float(row["Entry"]), float(row["TP"]), float(row["SL"]), future_data
+        )
         if result is not None:
             history_df.loc[idx, "Result"] = result
             history_df.loc[idx, "PnL"] = pnl
-            updated = True
+    return history_df
 
-    return history_df, updated
+
+# ==========================================
+# 見逃し回収：直近の足をさかのぼってシグナルを探す
+# ==========================================
+def find_signal_events(df, df_jst, hours):
+    """直近hours時間の確定した足から、シグナルが出た足(連続の最初の1本)を全部探す。
+    最後の1本は未確定なので対象外。"""
+    since = pd.Timestamp.now(tz="Asia/Tokyo") - pd.Timedelta(hours=hours)
+    is_buy = (df["Signal"] == 1) & (df["Action"] > 0)
+    is_sell = (df["Signal"] == -1) & (df["Action"] < 0)
+    events = []
+    for i in range(len(df) - 1):
+        if not (is_buy.iloc[i] or is_sell.iloc[i]):
+            continue
+        t = df_jst[i]
+        if t < since:
+            continue
+        events.append((i, "BUY" if is_buy.iloc[i] else "SELL", t))
+    return events
+
+
+def age_text(minutes):
+    m = int(minutes)
+    if m < 60:
+        return f"{m}分前"
+    h, mm = divmod(m, 60)
+    if h < 24:
+        return f"{h}時間{mm}分前"
+    d, hh = divmod(h, 24)
+    return f"{d}日{hh}時間前"
+
+
+RESULT_TEXT = {
+    "WIN": "🏆利確",
+    "LOSE": "💧損切",
+    "TIMEOUT": "⌛時間切れ",
+}
 
 
 def process_pair(pair):
-    csv_file = f"signals_history_{pair.replace('=X', '')}.csv"
+    label = pair.replace("=X", "")
+    csv_file = f"signals_history_{label}.csv"
+    first_time = not os.path.exists(csv_file)
+
     df, df_jst = build_signals(pair)
+    history_df = load_history(csv_file)
+    known = set(zip(history_df["Timestamp"].astype(str), history_df["Type"].astype(str)))
 
-    if os.path.exists(csv_file):
-        history_df = pd.read_csv(csv_file)
-    else:
-        history_df = pd.DataFrame(columns=["Timestamp", "Type", "Entry", "TP", "SL", "RSI", "ATR", "Result", "PnL"])
-    if "PnL" not in history_df.columns:
-        history_df["PnL"] = float("nan")
-    for col in ["Entry", "TP", "SL", "PnL"]:
-        history_df[col] = pd.to_numeric(history_df[col], errors="coerce")
+    lookback = FIRST_LOOKBACK_HOURS if first_time else LOOKBACK_HOURS
+    events = find_signal_events(df, df_jst, lookback)
 
-    history_df, _ = verify_past_signals(history_df, df)
-    stats = summarize(history_df)
+    # まだ記録していないシグナルだけを新規として回収する
+    new_rows = []
+    for i, sig_type, t in events:
+        ts = t.strftime("%Y-%m-%d %H:%M:%S")
+        if (ts, sig_type) in known:
+            continue
+        entry = float(df["Close"].iloc[i])
+        atr = float(df["ATR"].iloc[i])
+        rsi = float(df["RSI"].iloc[i])
+        if pd.isna(atr) or pd.isna(rsi):
+            continue
+        tp, sl, tp_w, sl_w = calc_tp_sl(entry, atr, sig_type)
+        result, pnl = judge_trade(sig_type, entry, tp, sl, df.iloc[i + 1: i + 1 + MAX_BARS])
+        new_rows.append({
+            "row": {
+                "Timestamp": ts, "Type": sig_type, "Entry": entry, "TP": tp, "SL": sl,
+                "RSI": rsi, "ATR": atr,
+                "Result": result if result is not None else "Pending",
+                "PnL": pnl if pnl is not None else float("nan"),
+            },
+            "time": t, "tp_w": tp_w, "sl_w": sl_w,
+        })
 
-    target_data = df.iloc[-2]
-    target_index_jst = df_jst[-2]
-    latest_date = target_index_jst.strftime("%Y-%m-%d %H:%M")
-    latest_close = float(target_data["Close"])
-    latest_rsi = float(target_data["RSI"])
-    latest_atr = float(target_data["ATR"])
-    latest_action_val = float(target_data["Action"])
-    current_signal = int(target_data["Signal"])
+    if new_rows:
+        add = pd.DataFrame([n["row"] for n in new_rows], columns=HISTORY_COLUMNS)
+        history_df = add if history_df.empty else pd.concat([history_df, add], ignore_index=True)
 
-    is_buy = current_signal == 1 and latest_action_val > 0
-    is_sell = current_signal == -1 and latest_action_val < 0
-    signal_sent = False
-    pair_label = pair.replace("=X", "")
-
-    if is_buy or is_sell:
-        sig_type = "BUY" if is_buy else "SELL"
-        tp_price, sl_price, tp_width, sl_width = calc_tp_sl(latest_close, latest_atr, sig_type)
-
-        new_row = pd.DataFrame([{
-            "Timestamp": target_index_jst.strftime("%Y-%m-%d %H:%M:%S"),
-            "Type": sig_type, "Entry": latest_close, "TP": tp_price, "SL": sl_price,
-            "RSI": latest_rsi, "ATR": latest_atr, "Result": "Pending", "PnL": float("nan"),
-        }])
-        history_df = pd.concat([history_df, new_row], ignore_index=True)
-
-        label = "買い" if is_buy else "売り"
-        sign, sign_sl = ("+", "-") if is_buy else ("-", "+")
-        msg = (
-            f"🎯 【{pair_label} 5分足】{label}シグナル\n"
-            f"⏰ 時刻: {latest_date}\n"
-            f"💰 レート: {latest_close:.2f}円\n"
-            f"──────────────\n"
-            f"📈 TP目安: {tp_price:.2f}円 ({sign}{tp_width:.2f})\n"
-            f"📉 SL目安: {sl_price:.2f}円 ({sign_sl}{sl_width:.2f})\n"
-            f"──────────────\n"
-            f"📊 {pair_label}累積勝率: {stats['win_rate']:.1f}% ({stats['wins']}/{stats['total']}勝)\n"
-            f"💹 平均: {stats['avg_pips']:+.1f}pips"
-        )
-        send_line_notification(msg)
-        signal_sent = True
-
+    # 以前から結果待ちだったシグナルも、最新の値動きで判定し直す
+    history_df = verify_past_signals(history_df, df)
     history_df.to_csv(csv_file, index=False)
 
-    if not signal_sent:
-        print(f"[{pair_label}] 新規シグナルなし (累積勝率: {stats['win_rate']:.1f}%, {stats['total']}件)")
+    stats = summarize(history_df)
+    stats_line = (
+        f"📊 {label}累積勝率: {stats['win_rate']:.1f}% ({stats['wins']}/{stats['total']}勝)\n"
+        f"💹 平均: {stats['avg_pips']:+.1f}pips"
+    )
 
-    return pair_label, stats, signal_sent
+    # ---- LINE通知 ----
+    now_jst = pd.Timestamp.now(tz="Asia/Tokyo")
+    live, late = [], []
+    for n in new_rows:
+        age = (now_jst - n["time"]).total_seconds() / 60
+        (live if age <= LIVE_MINUTES else late).append((n, age))
+
+    sent = False
+    for n, _ in live:  # リアルタイムのシグナル: 従来どおり詳細を送る
+        r = n["row"]
+        is_buy = r["Type"] == "BUY"
+        sign, sign_sl = ("+", "-") if is_buy else ("-", "+")
+        msg = (
+            f"🎯 【{label} 5分足】{'買い' if is_buy else '売り'}シグナル\n"
+            f"⏰ 時刻: {n['time'].strftime('%Y-%m-%d %H:%M')}\n"
+            f"💰 レート: {r['Entry']:.2f}円\n"
+            f"──────────────\n"
+            f"📈 TP目安: {r['TP']:.2f}円 ({sign}{n['tp_w']:.2f})\n"
+            f"📉 SL目安: {r['SL']:.2f}円 ({sign_sl}{n['sl_w']:.2f})\n"
+            f"──────────────\n"
+            f"{stats_line}"
+        )
+        send_line_notification(msg)
+        sent = True
+
+    if late:  # 見逃し回収: 1通にまとめて送る（検証用データとして記録）
+        late.sort(key=lambda x: x[0]["time"])
+        lines = [f"📝 【{label}】見逃し回収 {len(late)}件",
+                 "(実行の合間に出ていたシグナルを、さかのぼって見つけました)"]
+        for n, age in late[:MAX_LATE_LINES]:
+            r = n["row"]
+            kind = "買い" if r["Type"] == "BUY" else "売り"
+            if r["Result"] in RESULT_TEXT:
+                res = f"{RESULT_TEXT[r['Result']]} {r['PnL'] * 100:+.1f}pips"
+            else:
+                res = "⏳結果待ち"
+            lines.append(f"・{n['time'].strftime('%m/%d %H:%M')} {kind} {r['Entry']:.2f}円 {res} ({age_text(age)})")
+        if len(late) > MAX_LATE_LINES:
+            lines.append(f"…ほか{len(late) - MAX_LATE_LINES}件")
+        lines.append(stats_line)
+        send_line_notification("\n".join(lines))
+        sent = True
+
+    print(f"[{label}] 調べた期間{lookback}時間 / シグナル{len(events)}件 / 新規{len(new_rows)}件 "
+          f"/ 累積勝率{stats['win_rate']:.1f}% ({stats['total']}件)")
+    return {"label": label, "stats": stats, "sent": sent, "found": len(events), "new": len(new_rows)}
 
 
-results = [process_pair(p) for p in PAIRS]
+def main():
+    results = []
+    for pair in PAIRS:
+        try:
+            results.append(process_pair(pair))
+        except Exception as e:  # 片方の通貨ペアで失敗しても、もう片方は続ける
+            print(f"[{pair}] エラー: {type(e).__name__}: {e}")
 
-if IS_MANUAL_RUN and not any(r[2] for r in results):
-    lines = ["🔧 【手動テスト】動作確認"]
-    for label, stats, _ in results:
-        lines.append(f"{label}: 勝率{stats['win_rate']:.1f}% ({stats['wins']}/{stats['total']}件) 平均{stats['avg_pips']:+.1f}pips")
-    lines.append("💡 システムは正常稼働中です。")
-    send_line_notification("\n".join(lines))
-    print("手動実行テスト通知を送信しました。")
+    if IS_MANUAL_RUN and not any(r["sent"] for r in results):
+        lines = ["🔧 【手動テスト】動作確認"]
+        for r in results:
+            s = r["stats"]
+            lines.append(
+                f"{r['label']}: 勝率{s['win_rate']:.1f}% ({s['wins']}/{s['total']}件) 平均{s['avg_pips']:+.1f}pips"
+                f" / 直近のシグナル{r['found']}件"
+            )
+        lines.append("💡 システムは正常稼働中です。")
+        send_line_notification("\n".join(lines))
+        print("手動実行テスト通知を送信しました。")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,15 +1,16 @@
 name: FX Signal Bot
+
 on:
   schedule:
     - cron: "*/5 * * * *"
       timezone: "Asia/Tokyo"
-
-#on:
-  #schedule:
-    # 5分ごとに自動実行（UTC時間）
-   # - cron: '*/5 * * * *'
   # 手動実行（Actionsタブからの実行）を許可
   workflow_dispatch:
+
+# 同時に2つ動いてCSVの保存がぶつからないよう、順番に実行する
+concurrency:
+  group: fx-signal-bot
+  cancel-in-progress: false
 
 jobs:
   run-bot:
@@ -41,10 +42,16 @@ jobs:
           IS_MANUAL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: python fx_signal.py
 
-      # CSVに変更があった場合のみ自動コミット＆プッシュするステップ
+      # 通貨ペアごとの記録(signals_history_AUDJPY.csv など)に変更があれば保存する
       - name: Commit and Push updated CSV
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add signals_history.csv
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update signals_history.csv [skip ci]" && git push)
+          git add signals_history_*.csv || true
+          if git diff --staged --quiet; then
+            echo "CSVに変更なし"
+          else
+            git commit -m "Update signals history [skip ci]"
+            git pull --rebase origin main
+            git push
+          fi

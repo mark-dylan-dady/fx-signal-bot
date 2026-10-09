@@ -1,8 +1,9 @@
 name: Daily Memo
 
 on:
-  schedule:
-    - cron: '0 22 * * *'   # 毎日 日本時間の朝7:00 (UTC 22:00)
+  schedule:  
+    - cron: '23 21 * * *'   # 毎日 日本時間の朝6:23 (UTC 21:23)
+    
   workflow_dispatch:        # Actionsタブから手動で「今すぐ実行」もできる
 
 jobs:

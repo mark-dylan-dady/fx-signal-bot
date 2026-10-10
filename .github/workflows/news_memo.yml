@@ -1,0 +1,30 @@
+name: News Memo
+
+on:
+  schedule:
+    - cron: '40 20 * * *'   # 日本時間 5:40(朝メモより少し後。遅れる日もあります)
+  workflow_dispatch:         # 手動実行ボタン用
+
+permissions:
+  contents: write
+
+jobs:
+  news:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run news memo
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: python news_memo.py
+      - name: Save history
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add news_history.csv
+          git diff --cached --quiet || git commit -m "update news history"
+          git push

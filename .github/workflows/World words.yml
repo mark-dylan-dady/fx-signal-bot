@@ -1,1 +1,20 @@
+name: World Words
 
+on:
+  schedule:
+    - cron: '50 19 * * *'   # 日本時間 4:50(遅れる日もあります)
+  workflow_dispatch:         # 手動実行ボタン用
+
+jobs:
+  words:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run world words
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: python world_words.py

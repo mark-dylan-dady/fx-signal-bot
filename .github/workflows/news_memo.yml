@@ -2,7 +2,7 @@ name: News Memo
 
 on:
   schedule:
-    - cron: '40 20 * * *'   # 日本時間 5:40(朝メモより少し後。遅れる日もあります)
+    - cron: '27 19 * * *'   # 日本時間 4:19(朝メモより少し後。遅れる日もあります)
   workflow_dispatch:         # 手動実行ボタン用
 
 permissions:

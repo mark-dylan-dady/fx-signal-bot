@@ -2,7 +2,7 @@ name: World Words
 
 on:
   schedule:
-    - cron: '50 19 * * *'   # 日本時間 4:50(遅れる日もあります)
+    - cron: '37 19 * * *'   # 日本時間 4:37(遅れる日もあります)
   workflow_dispatch:         # 手動実行ボタン用
 
 jobs:

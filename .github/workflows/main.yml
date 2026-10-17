@@ -2,7 +2,7 @@ name: FX Signal Bot
 
 on:
   schedule:
-      - cron: "2-59/5 * * * *"
+     - cron: "2-59/5 * * * *"
       timezone: "Asia/Tokyo"
   # 手動実行（Actionsタブからの実行）を許可
   workflow_dispatch:

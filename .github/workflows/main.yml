@@ -1,5 +1,4 @@
 name: FX Signal Bot
-name: FX Signal Bot
 
 on:
   schedule:

@@ -39,3 +39,8 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python -m fx_research.collect_prices
+
+      - name: Check price data quality
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+       run: python -m fx_research.check_data

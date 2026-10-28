@@ -30,7 +30,12 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Test Neon connection and initialize database
+      - name: Initialize database
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python -m fx_research.db
+
+      - name: Collect 5-minute FX prices
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -m fx_research.collect_prices

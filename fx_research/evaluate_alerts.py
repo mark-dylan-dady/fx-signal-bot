@@ -9,11 +9,11 @@ HORIZONS_MINUTES = (5, 15, 60)
 
 
 def evaluate_alerts():
-    """未評価のアラートについて、検出後の価格変化を記録する。"""
     database_url = os.environ["DATABASE_URL"]
 
     evaluated_count = 0
     pending_count = 0
+    invalid_count = 0
 
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
@@ -33,11 +33,15 @@ def evaluate_alerts():
             )
             alerts = cur.fetchall()
 
+            print(f"Alerts found: {len(alerts)}")
+
             for alert_id, symbol, alert_time, alert_close in alerts:
                 if alert_close is None or float(alert_close) <= 0:
                     print(
-                        f"Skip alert {alert_id}: invalid alert price."
+                        f"Invalid alert price: id={alert_id}, "
+                        f"symbol={symbol}"
                     )
+                    invalid_count += 1
                     continue
 
                 for horizon in HORIZONS_MINUTES:
@@ -50,6 +54,7 @@ def evaluate_alerts():
                         """,
                         (alert_id, horizon),
                     )
+
                     if cur.fetchone():
                         continue
 
@@ -57,7 +62,6 @@ def evaluate_alerts():
                         minutes=horizon
                     )
 
-                    # 目標時刻と完全一致する価格データだけを使う。
                     cur.execute(
                         """
                         SELECT timestamp, close
@@ -69,24 +73,27 @@ def evaluate_alerts():
                         (symbol, target_time),
                     )
                     future = cur.fetchone()
-                    
-                    if future is None:
-   　　　　　　　　　　　 print(
-     　　　　　　　　　　　   f"Pending: alert_id={alert_id}, "
-      　　　　　　　　　　　  f"symbol={symbol}, "
-      　　　　　　　　　　　  f"horizon={horizon}m, "
-      　　　　　　　　　　　  f"target_time={target_time} "
-      　　　　　　　　　　　  f"(future price not found)"
-   　　　　　　　　　 )
-   　　　　　　　　　 pending_count += 1
-  　　　　　　　　　  continue
 
-                    
+                    if future is None:
+                        print(
+                            f"Pending: alert_id={alert_id}, "
+                            f"symbol={symbol}, "
+                            f"horizon={horizon}m, "
+                            f"target_time={target_time}"
+                        )
+                        pending_count += 1
+                        continue
 
                     future_time, future_close = future
 
                     if future_close is None or float(future_close) <= 0:
-                        pending_count += 1
+                        print(
+                            f"Invalid future price: alert_id={alert_id}, "
+                            f"symbol={symbol}, "
+                            f"horizon={horizon}m, "
+                            f"target_time={target_time}"
+                        )
+                        invalid_count += 1
                         continue
 
                     price_change_pct = (
@@ -122,6 +129,7 @@ def evaluate_alerts():
     print("Project ORION: alert evaluation finished.")
     print(f"New evaluations saved: {evaluated_count}")
     print(f"Pending evaluations: {pending_count}")
+    print(f"Invalid prices: {invalid_count}")
 
 
 if __name__ == "__main__":

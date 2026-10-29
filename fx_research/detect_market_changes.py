@@ -9,6 +9,7 @@ import psycopg
 HISTORY_BARS = 600
 BASELINE_RETURNS = 288
 CHANGE_MULTIPLIER = 3.0
+RECENT_HOURS = 24
 
 
 def detect_market_changes():
@@ -37,7 +38,9 @@ def detect_market_changes():
         with conn.cursor() as cur:
             cur.execute(query, (HISTORY_BARS,))
             for symbol, timestamp, close in cur.fetchall():
-                grouped[symbol].append((timestamp, float(close)))
+                grouped[symbol].append(
+                    (timestamp, float(close))
+                )
 
     if not grouped:
         print("No price data found.")
@@ -46,21 +49,19 @@ def detect_market_changes():
     for symbol, bars in sorted(grouped.items()):
         print(f"\n=== {symbol} ===")
 
-        if len(bars) < 3:
-            print("Not enough price data.")
-            continue
-
         returns = []
 
         for previous, current in zip(bars, bars[1:]):
             previous_time, previous_close = previous
             current_time, current_close = current
 
-            # Only compare consecutive 5-minute bars.
-            if (current_time - previous_time).total_seconds() != 300:
+            # Skip gaps: only compare consecutive 5-minute bars.
+            if (
+                current_time - previous_time
+            ).total_seconds() != 300:
                 continue
 
-            if previous_close == 0:
+            if previous_close <= 0:
                 continue
 
             change_pct = abs(
@@ -70,41 +71,57 @@ def detect_market_changes():
 
             returns.append((current_time, change_pct))
 
-        if not returns:
-            print("No consecutive 5-minute bars available.")
-            continue
-
-        latest_time, latest_change = returns[-1]
-
-        print(f"Latest timestamp: {latest_time}")
-        print(f"Latest absolute change: {latest_change:.5f}%")
-
-        # Exclude the latest return from the historical baseline.
-        history = [
-            value for _, value in returns[:-1]
-        ][-BASELINE_RETURNS:]
-
-        if len(history) < 30:
+        if len(returns) < BASELINE_RETURNS + 1:
             print(
-                f"Not enough historical returns: {len(history)}"
+                f"Not enough valid returns: {len(returns)}"
             )
             continue
 
-        baseline = median(history)
+        latest_time = returns[-1][0]
+        cutoff_time = latest_time.timestamp() - RECENT_HOURS * 3600
 
-        print(f"Historical median: {baseline:.5f}%")
+        alerts = []
 
-        if baseline <= 0:
-            print("Baseline is zero; detection skipped.")
+        for i, (timestamp, change_pct) in enumerate(returns):
+            if timestamp.timestamp() < cutoff_time:
+                continue
+
+            # Use only earlier returns for the baseline.
+            history = [
+                value
+                for _, value in returns[:i]
+            ][-BASELINE_RETURNS:]
+
+            if len(history) < 30:
+                continue
+
+            baseline = median(history)
+
+            if baseline <= 0:
+                continue
+
+            ratio = change_pct / baseline
+
+            if ratio >= CHANGE_MULTIPLIER:
+                alerts.append(
+                    (timestamp, change_pct, baseline, ratio)
+                )
+
+        print(f"Latest data: {latest_time}")
+        print(f"Valid 5-minute returns: {len(returns)}")
+        print(f"Alerts in last {RECENT_HOURS} hours: {len(alerts)}")
+
+        if not alerts:
+            print("No unusual movements detected.")
             continue
 
-        ratio = latest_change / baseline
-        print(f"Change ratio: {ratio:.2f}x")
-
-        if ratio >= CHANGE_MULTIPLIER:
-            print("ALERT: Unusually large price movement!")
-        else:
-            print("No unusual movement detected.")
+        for timestamp, change_pct, baseline, ratio in alerts:
+            print(
+                f"ALERT | {timestamp} | "
+                f"change={change_pct:.5f}% | "
+                f"median={baseline:.5f}% | "
+                f"ratio={ratio:.2f}x"
+            )
 
 
 if __name__ == "__main__":

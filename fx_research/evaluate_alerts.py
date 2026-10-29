@@ -69,8 +69,8 @@ def evaluate_alerts():
                         (symbol, target_time),
                     )
                     future = cur.fetchone()
-　　　　　　　　　　　
-　　　　　　　　　　　if future is None:
+                    
+                    if future is None:
    　　　　　　　　　　　 print(
      　　　　　　　　　　　   f"Pending: alert_id={alert_id}, "
       　　　　　　　　　　　  f"symbol={symbol}, "

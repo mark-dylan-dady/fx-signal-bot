@@ -69,10 +69,19 @@ def evaluate_alerts():
                         (symbol, target_time),
                     )
                     future = cur.fetchone()
+　　　　　　　　　　　
+　　　　　　　　　　　if future is None:
+   　　　　　　　　　　　 print(
+     　　　　　　　　　　　   f"Pending: alert_id={alert_id}, "
+      　　　　　　　　　　　  f"symbol={symbol}, "
+      　　　　　　　　　　　  f"horizon={horizon}m, "
+      　　　　　　　　　　　  f"target_time={target_time} "
+      　　　　　　　　　　　  f"(future price not found)"
+   　　　　　　　　　 )
+   　　　　　　　　　 pending_count += 1
+  　　　　　　　　　  continue
 
-                    if future is None:
-                        pending_count += 1
-                        continue
+                    
 
                     future_time, future_close = future
 

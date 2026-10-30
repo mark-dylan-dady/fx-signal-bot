@@ -1,6 +1,6 @@
 
 import logging
-from datetime import timedelta
+from datetime import time, timedelta
 from zoneinfo import ZoneInfo
 
 from fx_research.db import get_connection
@@ -13,6 +13,7 @@ logging.basicConfig(
 
 BAR_INTERVAL_MINUTES = 5
 NEW_YORK = ZoneInfo("America/New_York")
+
 
 
 def is_market_open(timestamp) -> bool:
@@ -29,14 +30,15 @@ def is_market_open(timestamp) -> bool:
 
     # 日曜日は17時から再開
     if weekday == 6:
-        return clock >= timedelta(hours=17)
+        return clock >= time(17, 0)
 
     # 金曜日は17時に終了
     if weekday == 4:
-        return clock < timedelta(hours=17)
+        return clock < time(17, 0)
 
     # 月曜日から木曜日は営業
     return True
+
 
 
 def count_open_slots(previous, current) -> int:

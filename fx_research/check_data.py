@@ -1,5 +1,7 @@
 
 import logging
+from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 from fx_research.db import get_connection
 
@@ -9,9 +11,51 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 
+BAR_INTERVAL_MINUTES = 5
+NEW_YORK = ZoneInfo("America/New_York")
+
+
+def is_market_open(timestamp) -> bool:
+    """ニューヨーク時間を基準にFX市場の週末休場を判定する。"""
+
+    local_time = timestamp.astimezone(NEW_YORK)
+
+    weekday = local_time.weekday()
+    clock = local_time.time()
+
+    # 土曜日は休場
+    if weekday == 5:
+        return False
+
+    # 日曜日は17時から再開
+    if weekday == 6:
+        return clock >= timedelta(hours=17)
+
+    # 金曜日は17時に終了
+    if weekday == 4:
+        return clock < timedelta(hours=17)
+
+    # 月曜日から木曜日は営業
+    return True
+
+
+def count_open_slots(previous, current) -> int:
+    """2つの時刻の間にある営業時間内の5分区間を数える。"""
+
+    count = 0
+    timestamp = previous + timedelta(minutes=BAR_INTERVAL_MINUTES)
+
+    while timestamp <= current:
+        if is_market_open(timestamp):
+            count += 1
+
+        timestamp += timedelta(minutes=BAR_INTERVAL_MINUTES)
+
+    return count
+
 
 def check_symbol(symbol: str) -> None:
-    """価格データの品質と5分を超える時間間隔を確認する。"""
+    """価格データの品質と市場営業時間内の空白を確認する。"""
 
     sql = """
         WITH ordered AS (
@@ -85,18 +129,39 @@ def check_symbol(symbol: str) -> None:
     print(f"5分未満の間隔          : {short_gaps}")
     print(f"5分を超える間隔        : {long_gaps}")
 
+    closed_only = 0
+    suspicious = 0
+
     for previous, current, duration in gaps:
+        open_slots = count_open_slots(previous, current)
+        open_minutes = open_slots * BAR_INTERVAL_MINUTES
+
         print("\n時間間隔の詳細:")
-        print(f"  前のデータ : {previous}")
-        print(f"  次のデータ : {current}")
-        print(f"  経過時間   : {duration}")
+        print(f"  前のデータ           : {previous}")
+        print(f"  次のデータ           : {current}")
+        print(f"  経過時間             : {duration}")
+        print(f"  営業時間内の5分区間  : {open_slots}区間")
+        print(f"  営業時間内の時間     : 約{open_minutes}分")
+
+        if open_slots == 0:
+            closed_only += 1
+            print("  判定                 : 市場休場時間内の空白")
+        else:
+            suspicious += 1
+            print("  判定                 : 市場営業時間を含む空白・要確認")
+
+    print("\n空白の集計:")
+    print(f"  市場休場時間内のみ   : {closed_only}件")
+    print(f"  営業時間を含む空白   : {suspicious}件")
 
     if total == 0:
         print("判定: データがありません")
     elif total != unique or invalid > 0 or short_gaps > 0:
         print("判定: データの確認が必要です")
+    elif suspicious > 0:
+        print("判定: 営業時間内のデータ欠損の疑いがあります")
     else:
-        print("判定: 基本チェック合格。時間間隔の原因を確認してください")
+        print("判定: 基本チェック合格。検出された空白は市場休場時間内です")
 
 
 def main():

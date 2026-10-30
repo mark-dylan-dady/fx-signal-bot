@@ -41,19 +41,22 @@ def is_market_open(timestamp) -> bool:
 
 
 
+
 def count_open_slots(previous, current) -> int:
-    """2つの時刻の間にある営業時間内の5分区間を数える。"""
+    """2つのデータ時刻の間にある、欠損した営業時間内の5分区間を数える。"""
 
     count = 0
     timestamp = previous + timedelta(minutes=BAR_INTERVAL_MINUTES)
 
-    while timestamp <= current:
+    # currentは次に存在するデータなので、欠損区間には含めない
+    while timestamp < current:
         if is_market_open(timestamp):
             count += 1
 
         timestamp += timedelta(minutes=BAR_INTERVAL_MINUTES)
 
     return count
+
 
 
 def check_symbol(symbol: str) -> None:

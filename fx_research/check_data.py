@@ -25,32 +25,24 @@ def is_market_open(timestamp) -> bool:
     weekday = local_time.weekday()
     clock = local_time.time()
 
-    # 土曜日は休場
     if weekday == 5:
         return False
 
-    # 日曜日は17時から再開
     if weekday == 6:
         return clock >= time(17, 0)
 
-    # 金曜日は17時に終了
     if weekday == 4:
         return clock < time(17, 0)
 
-    # 月曜日から木曜日は営業
     return True
 
 
 def count_open_slots(previous, current) -> int:
-    """
-    2つのデータ時刻の間にある、
-    欠損した市場営業時間内の5分区間を数える。
-    """
+    """欠損した市場営業時間内の5分区間を数える。"""
 
     count = 0
     timestamp = previous + timedelta(minutes=BAR_INTERVAL_MINUTES)
 
-    # 次のデータが存在する時刻は欠損に含めない
     while timestamp < current:
         if is_market_open(timestamp):
             count += 1
@@ -65,18 +57,92 @@ def classify_gap(previous, current, duration):
 
     duration_seconds = duration.total_seconds()
 
-    # 5分間隔の倍数でなければ原因不明
     if duration_seconds % BAR_INTERVAL_SECONDS != 0:
         return "UNKNOWN", 0
 
     open_slots = count_open_slots(previous, current)
 
-    # 市場営業時間内に欠損がなければ休場扱い
     if open_slots == 0:
         return "MARKET_CLOSED", open_slots
 
-    # 営業時間内に欠損があれば配信元データの欠損を疑う
     return "SOURCE_GAP", open_slots
+
+
+def save_gap_history(symbol: str, gaps: list) -> int:
+    """
+    欠損履歴をNeonに保存する。
+
+    同じ通貨ペア・前後の時刻の欠損が既に存在する場合は、
+    新規登録せず検出回数と最終検出日時を更新する。
+    """
+
+    if not gaps:
+        return 0
+
+    sql = """
+        INSERT INTO data_gaps (
+            symbol,
+            previous_timestamp,
+            next_timestamp,
+            duration_minutes,
+            missing_bars,
+            classification
+        )
+        VALUES (%s, %s, %s, %s, %s, %s)
+
+        ON CONFLICT (
+            symbol,
+            previous_timestamp,
+            next_timestamp
+        )
+        DO UPDATE SET
+            duration_minutes = EXCLUDED.duration_minutes,
+            missing_bars = EXCLUDED.missing_bars,
+            classification = EXCLUDED.classification,
+            last_detected_at = NOW(),
+            detection_count = data_gaps.detection_count + 1
+    """
+
+    records = []
+
+    for previous, current, duration, classification, open_slots in gaps:
+
+        if classification == "MARKET_CLOSED":
+            continue
+
+        # UNKNOWNの場合は実際の経過時間を記録する。
+        if classification == "UNKNOWN":
+            duration_minutes = duration.total_seconds() / 60
+            missing_bars = 0
+        else:
+            duration_minutes = open_slots * BAR_INTERVAL_MINUTES
+            missing_bars = open_slots
+
+        records.append(
+            (
+                symbol,
+                previous,
+                current,
+                duration_minutes,
+                missing_bars,
+                classification,
+            )
+        )
+
+    if not records:
+        return 0
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(sql, records)
+
+    logging.info(
+        "%s: 欠損履歴を%d件保存・更新しました",
+        symbol,
+        len(records),
+    )
+
+    return len(records)
 
 
 def check_symbol(symbol: str) -> None:
@@ -166,12 +232,24 @@ def check_symbol(symbol: str) -> None:
     source_gap = 0
     unknown = 0
 
+    classified_gaps = []
+
     for previous, current, duration in gaps:
 
         classification, open_slots = classify_gap(
             previous,
             current,
             duration,
+        )
+
+        classified_gaps.append(
+            (
+                previous,
+                current,
+                duration,
+                classification,
+                open_slots,
+            )
         )
 
         open_minutes = open_slots * BAR_INTERVAL_MINUTES
@@ -202,6 +280,11 @@ def check_symbol(symbol: str) -> None:
     print(f"  MARKET_CLOSED       : {market_closed}件")
     print(f"  SOURCE_GAP          : {source_gap}件")
     print(f"  UNKNOWN             : {unknown}件")
+
+    # 市場休場以外の欠損履歴をNeonに保存する。
+    saved = save_gap_history(symbol, classified_gaps)
+
+    print(f"  Neon保存・更新       : {saved}件")
 
     if total == 0:
         print("判定: データがありません")

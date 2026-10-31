@@ -91,6 +91,38 @@ def evaluate_symbol(rows, symbol, expected_slots, now):
         row[1].replace(second=0, microsecond=0)
         for row in symbol_rows
     }
+    
+    expected_set = set(expected_slots)
+
+    evaluation_end = now - timedelta(
+        minutes=LATEST_DATA_GRACE_MINUTES
+    )
+
+    evaluated_set = {
+        slot for slot in expected_set
+        if slot <= evaluation_end
+    }
+
+    matched_times = actual_times & evaluated_set
+    outside_times = actual_times - evaluated_set
+
+    print(f"評価対象と一致したデータ : {len(matched_times)}")
+    print(f"評価対象外のデータ       : {len(outside_times)}")
+
+    if outside_times:
+        print("【評価対象外データの詳細】")
+
+        for timestamp in sorted(outside_times):
+            if timestamp > evaluation_end:
+                reason = "最新15分の猶予期間"
+            elif not is_market_open(timestamp):
+                reason = "市場休場時間"
+            elif timestamp.minute % 5 != 0:
+                reason = "5分足の時刻境界外"
+            else:
+                reason = "その他（要確認）"
+
+            print(f"  {timestamp} : {reason}")
 
     valid_prices = sum(
         1 for row in symbol_rows

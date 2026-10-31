@@ -4,7 +4,8 @@ import psycopg
 
 
 def init_research_tables():
-    """研究用のアラート記録・検証結果テーブルを作成する。"""
+    """研究用のアラート・検証・データ欠損テーブルを作成する。"""
+
     database_url = os.environ.get("DATABASE_URL")
 
     if not database_url:
@@ -39,14 +40,32 @@ def init_research_tables():
     );
     """
 
+    create_data_gaps_sql = """
+    CREATE TABLE IF NOT EXISTS data_gaps (
+        id BIGSERIAL PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        previous_timestamp TIMESTAMPTZ NOT NULL,
+        next_timestamp TIMESTAMPTZ NOT NULL,
+        duration_minutes DOUBLE PRECISION NOT NULL,
+        missing_bars INTEGER NOT NULL,
+        classification TEXT NOT NULL,
+        first_detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        detection_count INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (symbol, previous_timestamp, next_timestamp)
+    );
+    """
+
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(create_alerts_sql)
             cur.execute(create_evaluations_sql)
+            cur.execute(create_data_gaps_sql)
 
     print("Project ORION: research tables are ready.")
     print("- market_alerts")
     print("- alert_evaluations")
+    print("- data_gaps")
 
 
 if __name__ == "__main__":

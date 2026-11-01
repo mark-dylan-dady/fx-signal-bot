@@ -22,9 +22,10 @@ def save_alerts(alerts):
             alert_timestamp,
             change_pct,
             baseline_pct,
-            ratio
+            ratio,
+            direction
         )
-        VALUES (%s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT (symbol, alert_timestamp) DO NOTHING
     """
 
@@ -93,12 +94,29 @@ def detect_market_changes():
             if previous_close <= 0:
                 continue
 
-            change_pct = abs(
+            # Signed return preserves price direction.
+            signed_change_pct = (
                 (current_close - previous_close)
                 / previous_close
             ) * 100
 
-            returns.append((current_time, change_pct))
+            # Magnitude is used for unusual-movement detection.
+            change_pct = abs(signed_change_pct)
+
+            if signed_change_pct > 0:
+                direction = "UP"
+            elif signed_change_pct < 0:
+                direction = "DOWN"
+            else:
+                direction = "UNKNOWN"
+
+            returns.append(
+                (
+                    current_time,
+                    change_pct,
+                    direction,
+                )
+            )
 
         if len(returns) < BASELINE_RETURNS + 1:
             print(
@@ -113,14 +131,14 @@ def detect_market_changes():
 
         alerts = []
 
-        for i, (timestamp, change_pct) in enumerate(returns):
+        for i, (timestamp, change_pct, direction) in enumerate(returns):
             if timestamp.timestamp() < cutoff_time:
                 continue
 
             # Use only earlier returns for the baseline.
             history = [
                 value
-                for _, value in returns[:i]
+                for _, value, _ in returns[:i]
             ][-BASELINE_RETURNS:]
 
             if len(history) < 30:
@@ -141,6 +159,7 @@ def detect_market_changes():
                         change_pct,
                         baseline,
                         ratio,
+                        direction,
                     )
                 )
 
@@ -159,9 +178,17 @@ def detect_market_changes():
 
         print(f"New alerts saved: {saved_count}")
 
-        for _, timestamp, change_pct, baseline, ratio in alerts:
+        for (
+            _,
+            timestamp,
+            change_pct,
+            baseline,
+            ratio,
+            direction,
+        ) in alerts:
             print(
                 f"ALERT | {timestamp} | "
+                f"direction={direction} | "
                 f"change={change_pct:.5f}% | "
                 f"median={baseline:.5f}% | "
                 f"ratio={ratio:.2f}x"

@@ -21,9 +21,18 @@ def init_research_tables():
         change_pct DOUBLE PRECISION NOT NULL,
         baseline_pct DOUBLE PRECISION NOT NULL,
         ratio DOUBLE PRECISION NOT NULL,
+        direction TEXT NOT NULL DEFAULT 'UNKNOWN',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (symbol, alert_timestamp)
     );
+    """
+
+    # 既存テーブルにも方向情報の列を追加する。
+    # 既存レコードは UNKNOWN として保持する。
+    add_direction_sql = """
+    ALTER TABLE market_alerts
+    ADD COLUMN IF NOT EXISTS direction
+        TEXT NOT NULL DEFAULT 'UNKNOWN';
     """
 
     create_evaluations_sql = """
@@ -59,11 +68,12 @@ def init_research_tables():
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(create_alerts_sql)
+            cur.execute(add_direction_sql)
             cur.execute(create_evaluations_sql)
             cur.execute(create_data_gaps_sql)
 
     print("Project ORION: research tables are ready.")
-    print("- market_alerts")
+    print("- market_alerts (direction column added)")
     print("- alert_evaluations")
     print("- data_gaps")
 

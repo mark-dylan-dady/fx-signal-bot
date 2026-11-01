@@ -3,6 +3,8 @@ name: ORION Research Data Collection
 
 on:
   workflow_dispatch:
+  repository_dispatch:
+    types: [tick]
   schedule:
     - cron: "*/5 * * * *"
 

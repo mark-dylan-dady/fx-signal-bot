@@ -34,30 +34,32 @@ jobs:
         run: |
           npx --yes dukascopy-node@latest \
             -i audjpy \
-            -from 2026-11-01T22:00:00Z \
-            -to 2026-11-02T00:00:00Z \
+            -from 2026-10-21T23:00:00Z \
+            -to 2026-11-02T06:00:00Z \
             -t m5 \
             -f csv \
             -p bid \
+            --retries 3 \
             -dir download \
-            -fn audjpy-20261102
+            -fn audjpy-20261021-20261102
 
       - name: Download EUR/JPY from Dukascopy
         run: |
           npx --yes dukascopy-node@latest \
             -i eurjpy \
-            -from 2026-11-01T22:00:00Z \
-            -to 2026-11-02T00:00:00Z \
+            -from 2026-10-21T23:00:00Z \
+            -to 2026-11-02T06:00:00Z \
             -t m5 \
             -f csv \
             -p bid \
+            --retries 3 \
             -dir download \
-            -fn eurjpy-20261102
+            -fn eurjpy-20261021-20261102
 
       - name: Save Dukascopy data to Neon
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           python -m fx_research.collect_dukascopy \
-            --audjpy download/audjpy-20261102.csv \
-            --eurjpy download/eurjpy-20261102.csv
+            --audjpy download/audjpy-20261021-20261102.csv \
+            --eurjpy download/eurjpy-20261021-20261102.csv

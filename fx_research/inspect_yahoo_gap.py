@@ -7,8 +7,10 @@ SYMBOLS = {
     "EUR/JPY": "EURJPY=X",
 }
 
-START = pd.Timestamp("2026-10-23 20:00:00", tz="UTC")
-END = pd.Timestamp("2026-10-26 01:00:00", tz="UTC")
+# 2026年11月2日の週明け直後の欠損を調査
+# UTC 22:00 = 日本時間 07:00
+START = pd.Timestamp("2026-11-01 21:00:00", tz="UTC")
+END = pd.Timestamp("2026-11-02 01:00:00", tz="UTC")
 
 for pair, ticker in SYMBOLS.items():
     print(f"\n--- {pair} ({ticker}) ---")
@@ -40,6 +42,7 @@ for pair, ticker in SYMBOLS.items():
             continue
 
         print("\n取得データ:")
+
         for timestamp, row in target.iterrows():
             print(
                 f"{timestamp} | "

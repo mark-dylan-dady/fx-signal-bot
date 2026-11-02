@@ -1,0 +1,61 @@
+
+name: ORION Research Dukascopy Gap Check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download AUD JPY data
+        run: |
+          npx --yes dukascopy-node@latest \
+            -i audjpy \
+            -from 2026-10-25T21:00:00Z \
+            -to 2026-10-26T00:00:00Z \
+            -t m5 \
+            -f csv \
+            -p bid \
+            -dir download \
+            -fn audjpy-gap-20261026
+
+      - name: Download EUR JPY data
+        run: |
+          npx --yes dukascopy-node@latest \
+            -i eurjpy \
+            -from 2026-10-25T21:00:00Z \
+            -to 2026-10-26T00:00:00Z \
+            -t m5 \
+            -f csv \
+            -p bid \
+            -dir download \
+            -fn eurjpy-gap-20261026
+
+      - name: Display downloaded data
+        run: |
+          echo "===== Dukascopy CSV results ====="
+          found=0
+
+          for f in download/*.csv; do
+            if [ -f "$f" ]; then
+              found=1
+              echo ""
+              echo "===== $f ====="
+              cat "$f"
+            fi
+          done
+
+          if [ "$found" -eq 0 ]; then
+            echo "ERROR: No CSV files were downloaded"
+            exit 1
+          fi

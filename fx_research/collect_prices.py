@@ -34,10 +34,8 @@ def inspect_data(symbol, data):
     if len(timestamps) == 0:
         raise RuntimeError(f"{symbol}: 取得データがありません")
 
-    # 時刻順に並べる
     timestamps.sort()
 
-    # 重複時刻を確認
     duplicate_count = len(timestamps) - len(set(timestamps))
 
     logging.info(
@@ -46,7 +44,6 @@ def inspect_data(symbol, data):
         duplicate_count,
     )
 
-    # 5分を超える時間間隔を調べる
     gap_count = 0
 
     for previous, current in zip(timestamps, timestamps[1:]):
@@ -112,6 +109,32 @@ def collect_symbol(symbol: str, ticker: str) -> int:
     if not required.issubset(data.columns):
         raise ValueError(
             f"{symbol}: 必要な価格列がありません: {list(data.columns)}"
+        )
+
+    # 診断：Yahoo Finance取得直後のOHLCを確認
+    flat_mask = (
+        (data["Open"] == data["High"])
+        & (data["High"] == data["Low"])
+        & (data["Low"] == data["Close"])
+    )
+
+    flat_count = int(flat_mask.sum())
+
+    logging.info(
+        "%s: Yahoo取得直後のOHLC全値一致=%d本 / 全体=%d本",
+        symbol,
+        flat_count,
+        len(data),
+    )
+
+    if flat_count > 0:
+        logging.warning(
+            "%s: Yahoo取得直後のOHLC全値一致データ（先頭5件）:\n%s",
+            symbol,
+            data.loc[
+                flat_mask,
+                ["Open", "High", "Low", "Close"],
+            ].head(5).to_string(),
         )
 
     # 取得したデータの時間間隔を検査

@@ -15,7 +15,8 @@ def get_connection():
 
 def init_db():
     """研究用の価格データテーブルを作成する。"""
-    create_table_sql = """
+
+    create_yahoo_table_sql = """
     CREATE TABLE IF NOT EXISTS price_bars (
         symbol TEXT NOT NULL,
         timestamp TIMESTAMPTZ NOT NULL,
@@ -29,11 +30,29 @@ def init_db():
     );
     """
 
+    create_dukascopy_table_sql = """
+    CREATE TABLE IF NOT EXISTS dukascopy_price_bars (
+        symbol TEXT NOT NULL,
+        timestamp TIMESTAMPTZ NOT NULL,
+        open DOUBLE PRECISION NOT NULL,
+        high DOUBLE PRECISION NOT NULL,
+        low DOUBLE PRECISION NOT NULL,
+        close DOUBLE PRECISION NOT NULL,
+        source TEXT NOT NULL DEFAULT 'dukascopy',
+        price_type TEXT NOT NULL DEFAULT 'BID',
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (symbol, timestamp)
+    );
+    """
+
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(create_table_sql)
+            cur.execute(create_yahoo_table_sql)
+            cur.execute(create_dukascopy_table_sql)
 
 
 if __name__ == "__main__":
     init_db()
-    print("Project ORION: price_bars テーブルの初期化が完了しました")
+    print("Project ORION: データベースの初期化が完了しました")
+    print("  - price_bars (Yahoo Finance)")
+    print("  - dukascopy_price_bars (Dukascopy)")

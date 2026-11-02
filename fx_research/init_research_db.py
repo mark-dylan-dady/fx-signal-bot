@@ -6,7 +6,7 @@ from fx_research.db import init_db
 
 
 def init_research_tables():
-    """研究用のアラート・検証・データ欠損テーブルを作成する。"""
+    """ORIONの研究用テーブルを作成する。"""
 
     database_url = os.environ.get("DATABASE_URL")
 
@@ -65,16 +65,45 @@ def init_research_tables():
     );
     """
 
+    create_comparisons_sql = """
+    CREATE TABLE IF NOT EXISTS source_price_comparisons (
+        id BIGSERIAL PRIMARY KEY,
+
+        symbol TEXT NOT NULL,
+        timestamp TIMESTAMPTZ NOT NULL,
+
+        yahoo_open DOUBLE PRECISION,
+        yahoo_high DOUBLE PRECISION,
+        yahoo_low DOUBLE PRECISION,
+        yahoo_close DOUBLE PRECISION,
+
+        dukascopy_open DOUBLE PRECISION,
+        dukascopy_high DOUBLE PRECISION,
+        dukascopy_low DOUBLE PRECISION,
+        dukascopy_close DOUBLE PRECISION,
+
+        close_diff DOUBLE PRECISION,
+        close_diff_pct DOUBLE PRECISION,
+
+        comparison_status TEXT NOT NULL,
+
+        compared_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+        UNIQUE (symbol, timestamp)
+    );
+    """
+
     # Yahoo Finance・Dukascopyの価格テーブルを準備する。
     init_db()
 
-    # 既存の研究用テーブルを準備する。
+    # 研究用テーブルを準備する。
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(create_alerts_sql)
             cur.execute(add_direction_sql)
             cur.execute(create_evaluations_sql)
             cur.execute(create_data_gaps_sql)
+            cur.execute(create_comparisons_sql)
 
     print("Project ORION: research tables are ready.")
     print("- price_bars (Yahoo Finance)")
@@ -82,6 +111,7 @@ def init_research_tables():
     print("- market_alerts (direction column added)")
     print("- alert_evaluations")
     print("- data_gaps")
+    print("- source_price_comparisons")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@
 import os
 import psycopg
 
+from fx_research.db import init_db
+
 
 def init_research_tables():
     """研究用のアラート・検証・データ欠損テーブルを作成する。"""
@@ -27,8 +29,6 @@ def init_research_tables():
     );
     """
 
-    # 既存テーブルにも方向情報の列を追加する。
-    # 既存レコードは UNKNOWN として保持する。
     add_direction_sql = """
     ALTER TABLE market_alerts
     ADD COLUMN IF NOT EXISTS direction
@@ -65,6 +65,10 @@ def init_research_tables():
     );
     """
 
+    # Yahoo Finance・Dukascopyの価格テーブルを準備する。
+    init_db()
+
+    # 既存の研究用テーブルを準備する。
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(create_alerts_sql)
@@ -73,6 +77,8 @@ def init_research_tables():
             cur.execute(create_data_gaps_sql)
 
     print("Project ORION: research tables are ready.")
+    print("- price_bars (Yahoo Finance)")
+    print("- dukascopy_price_bars (Dukascopy)")
     print("- market_alerts (direction column added)")
     print("- alert_evaluations")
     print("- data_gaps")

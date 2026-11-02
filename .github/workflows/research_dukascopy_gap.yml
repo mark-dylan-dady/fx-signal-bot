@@ -1,5 +1,5 @@
 
-name: ORION Research Dukascopy Gap Check
+name: Research Dukascopy Gap
 
 on:
   workflow_dispatch:
@@ -9,53 +9,39 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Download AUD JPY data
+      - name: Download AUD/JPY M5
         run: |
           npx --yes dukascopy-node@latest \
             -i audjpy \
-            -from 2026-10-25T21:00:00Z \
-            -to 2026-10-26T00:00:00Z \
+            -from 2026-11-01T22:00:00Z \
+            -to 2026-11-02T00:00:00Z \
             -t m5 \
             -f csv \
             -p bid \
             -dir download \
-            -fn audjpy-gap-20261026
+            -fn audjpy-gap-20261102
 
-      - name: Download EUR JPY data
+      - name: Download EUR/JPY M5
         run: |
           npx --yes dukascopy-node@latest \
             -i eurjpy \
-            -from 2026-10-25T21:00:00Z \
-            -to 2026-10-26T00:00:00Z \
+            -from 2026-11-01T22:00:00Z \
+            -to 2026-11-02T00:00:00Z \
             -t m5 \
             -f csv \
             -p bid \
             -dir download \
-            -fn eurjpy-gap-20261026
+            -fn eurjpy-gap-20261102
 
-      - name: Display downloaded data
+      - name: Show downloaded CSV
         run: |
-          echo "===== Dukascopy CSV results ====="
-          found=0
+          echo "===== AUD/JPY ====="
+          cat download/audjpy-gap-20261102.csv
 
-          for f in download/*.csv; do
-            if [ -f "$f" ]; then
-              found=1
-              echo ""
-              echo "===== $f ====="
-              cat "$f"
-            fi
-          done
-
-          if [ "$found" -eq 0 ]; then
-            echo "ERROR: No CSV files were downloaded"
-            exit 1
-          fi
+          echo "===== EUR/JPY ====="
+          cat download/eurjpy-gap-20261102.csv

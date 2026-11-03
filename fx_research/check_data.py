@@ -304,7 +304,7 @@ def check_symbol(symbol: str) -> None:
 
 
 def main():
-    for symbol in ("AUD/JPY", "EUR/JPY"):
+    for symbol in ("AUD/JPY", "EUR/JPY", "EUR/USD", "USD/JPY"):
         try:
             check_symbol(symbol)
 

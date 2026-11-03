@@ -15,6 +15,8 @@ logging.basicConfig(
 SYMBOLS = {
     "AUD/JPY": "AUDJPY=X",
     "EUR/JPY": "EURJPY=X",
+    "EUR/USD": "EURUSD=X",
+    "USD/JPY": "USDJPY=X",
 }
 
 BAR_INTERVAL_MINUTES = 5

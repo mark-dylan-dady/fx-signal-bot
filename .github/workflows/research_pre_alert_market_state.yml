@@ -1,0 +1,29 @@
+
+name: Research Pre-Alert Market State
+
+on:
+  workflow_dispatch:
+
+jobs:
+  analyze-pre-alert-market-state:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pre-alert market state analysis
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python -m fx_research.report_pre_alert_market_state

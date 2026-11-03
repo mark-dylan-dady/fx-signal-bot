@@ -5,7 +5,7 @@ from datetime import timedelta
 import psycopg
 
 
-HORIZONS_MINUTES = (5, 15, 60)
+HORIZONS_MINUTES = (5, 15, 30, 60)
 
 
 def evaluate_alerts():

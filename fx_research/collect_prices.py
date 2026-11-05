@@ -17,6 +17,7 @@ SYMBOLS = {
     "EUR/JPY": "EURJPY=X",
     "EUR/USD": "EURUSD=X",
     "USD/JPY": "USDJPY=X",
+    "AUD/USD": "AUDUSD=X",
 }
 
 BAR_INTERVAL_MINUTES = 5

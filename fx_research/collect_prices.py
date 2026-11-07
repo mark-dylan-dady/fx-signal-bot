@@ -1,4 +1,3 @@
-
 import logging
 import sys
 
@@ -21,6 +20,18 @@ SYMBOLS = {
 }
 
 BAR_INTERVAL_MINUTES = 5
+
+# AUD/USDの追加診断対象（UTC）
+AUDUSD_DIAGNOSTIC_WINDOWS = [
+    (
+        "2026-10-30 21:00",
+        "2026-10-30 21:30",
+    ),
+    (
+        "2026-10-30 23:10",
+        "2026-10-30 23:40",
+    ),
+]
 
 
 def inspect_data(symbol, data):
@@ -84,6 +95,101 @@ def inspect_data(symbol, data):
     return duplicate_count, gap_count
 
 
+def diagnose_audusd_windows(data, flat_mask):
+    """AUD/USDの指定区間について、取得直後の価格を詳しく記録する。"""
+
+    logging.info(
+        "AUD/USD: 追加診断開始（Yahoo Finance取得直後のデータ）"
+    )
+
+    # yfinanceの時刻をUTCにそろえる
+    utc_timestamps = []
+
+    for timestamp in data.index:
+        if timestamp.tzinfo is not None:
+            utc_timestamp = timestamp.tz_convert("UTC")
+        else:
+            utc_timestamp = timestamp
+
+        utc_timestamps.append(utc_timestamp)
+
+    for window_start, window_end in AUDUSD_DIAGNOSTIC_WINDOWS:
+
+        logging.info(
+            "AUD/USD: 診断対象区間 %s ～ %s UTC",
+            window_start,
+            window_end,
+        )
+
+        # 指定区間内のデータ位置を探す
+        target_positions = []
+
+        for position, timestamp in enumerate(utc_timestamps):
+            timestamp_text = timestamp.strftime("%Y-%m-%d %H:%M")
+
+            if window_start <= timestamp_text <= window_end:
+                target_positions.append(position)
+
+        if not target_positions:
+            logging.warning(
+                "AUD/USD: 指定区間に取得データがありません"
+            )
+            continue
+
+        # 区間の前後1本も診断対象に含める
+        first_position = max(0, target_positions[0] - 1)
+        last_position = min(
+            len(data) - 1,
+            target_positions[-1] + 1,
+        )
+
+        logging.info(
+            "AUD/USD: 診断対象データ=%d本（前後1本を含む）",
+            last_position - first_position + 1,
+        )
+
+        for position in range(first_position, last_position + 1):
+
+            timestamp = utc_timestamps[position]
+            bar = data.iloc[position]
+
+            if position > 0:
+                previous_timestamp = utc_timestamps[position - 1]
+                previous_close = data.iloc[position - 1]["Close"]
+                gap_minutes = (
+                    timestamp - previous_timestamp
+                ).total_seconds() / 60
+            else:
+                previous_timestamp = None
+                previous_close = None
+                gap_minutes = None
+
+            is_flat = bool(flat_mask.iloc[position])
+
+            logging.info(
+                (
+                    "AUD/USD DIAG: timestamp=%s "
+                    "previous_timestamp=%s "
+                    "previous_close=%s "
+                    "Open=%s High=%s Low=%s Close=%s "
+                    "flat=%s gap_minutes=%s"
+                ),
+                timestamp,
+                previous_timestamp,
+                previous_close,
+                bar["Open"],
+                bar["High"],
+                bar["Low"],
+                bar["Close"],
+                is_flat,
+                gap_minutes,
+            )
+
+    logging.info(
+        "AUD/USD: 追加診断終了"
+    )
+
+
 def collect_symbol(symbol: str, ticker: str) -> int:
     """5分足を取得し、品質を検査してNeonへ保存する。"""
 
@@ -139,6 +245,10 @@ def collect_symbol(symbol: str, ticker: str) -> int:
                 ["Open", "High", "Low", "Close"],
             ].head(5).to_string(),
         )
+
+    # AUD/USDだけ、指定した過去区間を詳しく診断する
+    if symbol == "AUD/USD":
+        diagnose_audusd_windows(data, flat_mask)
 
     # 取得したデータの時間間隔を検査
     duplicate_count, gap_count = inspect_data(symbol, data)

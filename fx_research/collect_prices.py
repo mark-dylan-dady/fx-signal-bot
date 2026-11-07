@@ -99,7 +99,8 @@ def diagnose_audusd_windows(data, flat_mask):
     """AUD/USDの指定区間について、取得直後の価格を詳しく記録する。"""
 
     logging.info(
-        "AUD/USD: 追加診断開始（Yahoo Finance取得直後のデータ）"
+        "AUD/USD: 診断対象データ件数=%d本",
+        len(data),
     )
 
     # yfinanceの時刻をUTCにそろえる
@@ -121,7 +122,6 @@ def diagnose_audusd_windows(data, flat_mask):
             window_end,
         )
 
-        # 指定区間内のデータ位置を探す
         target_positions = []
 
         for position, timestamp in enumerate(utc_timestamps):
@@ -156,6 +156,7 @@ def diagnose_audusd_windows(data, flat_mask):
             if position > 0:
                 previous_timestamp = utc_timestamps[position - 1]
                 previous_close = data.iloc[position - 1]["Close"]
+
                 gap_minutes = (
                     timestamp - previous_timestamp
                 ).total_seconds() / 60
@@ -185,8 +186,76 @@ def diagnose_audusd_windows(data, flat_mask):
                 gap_minutes,
             )
 
+
+def collect_audusd_diagnostic():
+    """
+    AUD/USDの診断専用データを10日間取得する。
+    この関数ではDBへの保存を行わない。
+    """
+
     logging.info(
-        "AUD/USD: 追加診断終了"
+        "AUD/USD: 診断専用データ取得開始（period=10d）"
+    )
+
+    data = yf.download(
+        "AUDUSD=X",
+        period="10d",
+        interval="5m",
+        auto_adjust=False,
+        progress=False,
+        threads=False,
+    )
+
+    if data.empty:
+        raise RuntimeError(
+            "AUD/USD: 診断専用データを取得できません"
+        )
+
+    # yfinanceの列がMultiIndexの場合にも対応
+    if getattr(data.columns, "nlevels", 1) > 1:
+        data.columns = data.columns.get_level_values(0)
+
+    required = {"Open", "High", "Low", "Close"}
+
+    if not required.issubset(data.columns):
+        raise ValueError(
+            "AUD/USD: 診断データに必要な価格列がありません"
+        )
+
+    logging.info(
+        "AUD/USD: 診断専用データ取得件数=%d本",
+        len(data),
+    )
+
+    logging.info(
+        "AUD/USD: 診断専用データ最初の時刻=%s",
+        data.index.min(),
+    )
+
+    logging.info(
+        "AUD/USD: 診断専用データ最後の時刻=%s",
+        data.index.max(),
+    )
+
+    flat_mask = (
+        (data["Open"] == data["High"])
+        & (data["High"] == data["Low"])
+        & (data["Low"] == data["Close"])
+    )
+
+    flat_count = int(flat_mask.sum())
+
+    logging.info(
+        "AUD/USD: 診断専用データOHLC全値一致=%d本 / 全体=%d本",
+        flat_count,
+        len(data),
+    )
+
+    # 指定した2区間の詳細を記録
+    diagnose_audusd_windows(data, flat_mask)
+
+    logging.info(
+        "AUD/USD: 診断専用データの確認終了（DB保存なし）"
     )
 
 
@@ -245,10 +314,6 @@ def collect_symbol(symbol: str, ticker: str) -> int:
                 ["Open", "High", "Low", "Close"],
             ].head(5).to_string(),
         )
-
-    # AUD/USDだけ、指定した過去区間を詳しく診断する
-    if symbol == "AUD/USD":
-        diagnose_audusd_windows(data, flat_mask)
 
     # 取得したデータの時間間隔を検査
     duplicate_count, gap_count = inspect_data(symbol, data)
@@ -365,6 +430,15 @@ def main():
                 symbol,
             )
             failed_symbols.append(symbol)
+
+    # 通常の価格収集とは独立して診断を実施する
+    try:
+        collect_audusd_diagnostic()
+
+    except Exception:
+        logging.exception(
+            "AUD/USD: 診断専用データの取得・確認に失敗"
+        )
 
     logging.info(
         "ORION価格収集終了：新規登録合計=%d本",

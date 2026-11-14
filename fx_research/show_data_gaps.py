@@ -21,9 +21,7 @@ def show_data_gaps():
             duration_minutes,
             missing_bars,
             classification,
-            first_detected_at,
-            last_detected_at,
-            detection_count
+            first_detected_at
         FROM data_gaps
         ORDER BY previous_timestamp DESC, symbol
     """
@@ -50,8 +48,6 @@ def show_data_gaps():
             missing_bars,
             classification,
             first_detected,
-            last_detected,
-            detection_count,
         ) = row
 
         print(f"通貨ペア       : {symbol}")
@@ -61,8 +57,6 @@ def show_data_gaps():
         print(f"欠損5分足本数  : {missing_bars}")
         print(f"分類           : {classification}")
         print(f"初回検出       : {first_detected}")
-        print(f"最終検出       : {last_detected}")
-        print(f"検出回数       : {detection_count}")
         print("-----------------------------------")
 
     print(f"\n登録された欠損履歴: {len(rows)}件")

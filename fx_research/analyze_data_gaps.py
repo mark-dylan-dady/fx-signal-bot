@@ -66,7 +66,7 @@ def inspect_missing_slots(previous, next_timestamp):
 
 
 def fetch_gap_history():
-    """Neonから欠損履歴を取得する。"""
+    """Neonから分析に必要な欠損履歴だけを取得する。"""
     sql = """
         SELECT
             symbol,
@@ -74,10 +74,7 @@ def fetch_gap_history():
             next_timestamp,
             duration_minutes,
             missing_bars,
-            classification,
-            first_detected_at,
-            last_detected_at,
-            detection_count
+            classification
         FROM data_gaps
         ORDER BY previous_timestamp, symbol
     """

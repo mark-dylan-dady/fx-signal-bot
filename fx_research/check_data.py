@@ -72,8 +72,8 @@ def save_gap_history(symbol: str, gaps: list) -> int:
     """
     欠損履歴をNeonに保存する。
 
-    同じ通貨ペア・前後の時刻の欠損が既に存在する場合は、
-    新規登録せず検出回数と最終検出日時を更新する。
+    同じ通貨ペア・前後の時刻の欠損は初回のみ登録し、
+    既存レコードは更新しない。
     """
 
     if not gaps:
@@ -95,12 +95,7 @@ def save_gap_history(symbol: str, gaps: list) -> int:
             previous_timestamp,
             next_timestamp
         )
-        DO UPDATE SET
-            duration_minutes = EXCLUDED.duration_minutes,
-            missing_bars = EXCLUDED.missing_bars,
-            classification = EXCLUDED.classification,
-            last_detected_at = NOW(),
-            detection_count = data_gaps.detection_count + 1
+        DO NOTHING
     """
 
     records = []
@@ -137,7 +132,7 @@ def save_gap_history(symbol: str, gaps: list) -> int:
             cur.executemany(sql, records)
 
     logging.info(
-        "%s: 欠損履歴を%d件保存・更新しました",
+        "%s: 欠損履歴の登録処理対象は%d件です",
         symbol,
         len(records),
     )
@@ -281,10 +276,15 @@ def check_symbol(symbol: str) -> None:
     print(f"  SOURCE_GAP          : {source_gap}件")
     print(f"  UNKNOWN             : {unknown}件")
 
-    # 市場休場以外の欠損履歴をNeonに保存する。
-    saved = save_gap_history(symbol, classified_gaps)
+    # 市場休場以外の欠損履歴を初回のみ登録する。
+    registration_candidates = save_gap_history(
+        symbol,
+        classified_gaps,
+    )
 
-    print(f"  Neon保存・更新       : {saved}件")
+    print(
+        f"  Neon登録処理対象     : {registration_candidates}件"
+    )
 
     if total == 0:
         print("判定: データがありません")

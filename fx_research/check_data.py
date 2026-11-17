@@ -1,4 +1,4 @@
-
+```python
 import logging
 from datetime import time, timedelta
 from zoneinfo import ZoneInfo
@@ -72,8 +72,8 @@ def save_gap_history(symbol: str, gaps: list) -> int:
     """
     欠損履歴をNeonに保存する。
 
-    同じ通貨ペア・前後の時刻の欠損は初回のみ登録し、
-    既存レコードは更新しない。
+    市場休場を含むすべての分類を保存する。
+    同じ通貨ペア・前後の時刻の欠損は重複登録しない。
     """
 
     if not gaps:
@@ -102,13 +102,10 @@ def save_gap_history(symbol: str, gaps: list) -> int:
 
     for previous, current, duration, classification, open_slots in gaps:
 
-        if classification == "MARKET_CLOSED":
-            continue
-
-        # UNKNOWNの場合は実際の経過時間を記録する。
         if classification == "UNKNOWN":
             duration_minutes = duration.total_seconds() / 60
             missing_bars = 0
+
         else:
             duration_minutes = open_slots * BAR_INTERVAL_MINUTES
             missing_bars = open_slots
@@ -276,7 +273,7 @@ def check_symbol(symbol: str) -> None:
     print(f"  SOURCE_GAP          : {source_gap}件")
     print(f"  UNKNOWN             : {unknown}件")
 
-    # 市場休場以外の欠損履歴を初回のみ登録する。
+    # 市場休場を含むすべての欠損履歴を初回のみ登録する。
     registration_candidates = save_gap_history(
         symbol,
         classified_gaps,
@@ -324,3 +321,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```

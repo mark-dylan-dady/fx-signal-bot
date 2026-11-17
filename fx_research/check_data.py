@@ -1,4 +1,4 @@
-```python
+
 import logging
 from datetime import time, timedelta
 from zoneinfo import ZoneInfo
@@ -321,4 +321,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
+

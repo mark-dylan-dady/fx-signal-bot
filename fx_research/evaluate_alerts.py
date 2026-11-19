@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 
 
+
 HORIZONS_MINUTES = (5, 15, 30, 60)
 BAR_INTERVAL_MINUTES = 5
 

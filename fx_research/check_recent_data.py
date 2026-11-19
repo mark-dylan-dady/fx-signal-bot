@@ -1,6 +1,6 @@
 
 import logging
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fx_research.db import get_connection
@@ -30,7 +30,6 @@ def is_market_open(timestamp) -> bool:
     """ニューヨーク時間を基準にFX市場の週末休場を判定する。"""
 
     local_time = timestamp.astimezone(NEW_YORK)
-
     weekday = local_time.weekday()
     clock = local_time.time()
 
@@ -76,7 +75,7 @@ def classify_gap(previous, current, duration):
     open_slots = count_open_slots(previous, current)
 
     if open_slots == 0:
-        return "MARKET_CLOSED", open_slots
+        return "MARKET_CLOSED", 0
 
     return "SOURCE_GAP", open_slots
 
@@ -84,14 +83,14 @@ def classify_gap(previous, current, duration):
 def check_recent_data():
     """直近2時間の価格データをまとめて検査する。"""
 
-    # 検査範囲の直前の1本も取得する。
-    # これにより、検査範囲の境界にある欠損を確認できる。
+    checked_at = datetime.now(timezone.utc)
+    cutoff = checked_at - timedelta(hours=CHECK_HOURS)
 
     sql = """
         WITH bounds AS (
             SELECT
-                NOW() AS checked_at,
-                NOW() - INTERVAL '2 hours' AS cutoff
+                %s::timestamptz AS checked_at,
+                %s::timestamptz AS cutoff
         ),
 
         boundary AS (
@@ -156,10 +155,8 @@ def check_recent_data():
             o.low,
             o.close,
             o.is_recent,
-            o.prev_timestamp,
-            b.checked_at
+            o.prev_timestamp
         FROM ordered AS o
-        CROSS JOIN bounds AS b
         ORDER BY o.symbol, o.timestamp
     """
 
@@ -182,28 +179,38 @@ def check_recent_data():
         DO NOTHING
     """
 
-    # DB接続は5通貨ペア全体で1回だけ。
+    results = {
+        symbol: {
+            "total": 0,
+            "invalid": 0,
+            "short": 0,
+            "long": 0,
+            "market_closed": 0,
+            "source_gap": 0,
+            "unknown": 0,
+            "boundary_gap": 0,
+            "last_timestamp": None,
+        }
+        for symbol in SYMBOLS
+    }
+
+    gap_records = []
+
+    # 5通貨ペアを1回のDB接続で検査・履歴登録する。
     with get_connection() as conn:
         with conn.cursor() as cur:
 
-            cur.execute(sql, (list(SYMBOLS), list(SYMBOLS)))
+            cur.execute(
+                sql,
+                (
+                    checked_at,
+                    cutoff,
+                    list(SYMBOLS),
+                    list(SYMBOLS),
+                ),
+            )
+
             rows = cur.fetchall()
-
-            results = {
-                symbol: {
-                    "total": 0,
-                    "invalid": 0,
-                    "short": 0,
-                    "long": 0,
-                    "market_closed": 0,
-                    "source_gap": 0,
-                    "unknown": 0,
-                    "last_timestamp": None,
-                }
-                for symbol in SYMBOLS
-            }
-
-            gap_records = []
 
             for (
                 symbol,
@@ -214,7 +221,6 @@ def check_recent_data():
                 close,
                 is_recent,
                 previous,
-                checked_at,
             ) in rows:
 
                 result = results[symbol]
@@ -243,63 +249,75 @@ def check_recent_data():
                 ):
                     if is_recent:
                         result["short"] += 1
+                    continue
 
-                elif duration > timedelta(
+                if duration == timedelta(
                     minutes=BAR_INTERVAL_MINUTES
                 ):
-                    if is_recent:
-                        result["long"] += 1
+                    continue
 
-                    classification, open_slots = classify_gap(
+                # 境界より前から続く空白は、
+                # 直近2時間だけの欠損とは断定できない。
+                # 別集計にして履歴登録しない。
+                if is_recent and previous < cutoff:
+                    result["boundary_gap"] += 1
+                    continue
+
+                # 直近2時間内で確認された空白だけを検査する。
+                if not is_recent:
+                    continue
+
+                result["long"] += 1
+
+                classification, open_slots = classify_gap(
+                    previous,
+                    timestamp,
+                    duration,
+                )
+
+                if classification == "MARKET_CLOSED":
+                    result["market_closed"] += 1
+
+                elif classification == "SOURCE_GAP":
+                    result["source_gap"] += 1
+
+                else:
+                    result["unknown"] += 1
+
+                if classification == "UNKNOWN":
+                    duration_minutes = (
+                        duration.total_seconds() / 60
+                    )
+                    missing_bars = 0
+                else:
+                    duration_minutes = (
+                        open_slots * BAR_INTERVAL_MINUTES
+                    )
+                    missing_bars = open_slots
+
+                gap_records.append(
+                    (
+                        symbol,
                         previous,
                         timestamp,
-                        duration,
+                        duration_minutes,
+                        missing_bars,
+                        classification,
                     )
+                )
 
-                    if classification == "MARKET_CLOSED":
-                        result["market_closed"] += 1
-
-                    elif classification == "SOURCE_GAP":
-                        result["source_gap"] += 1
-
-                    else:
-                        result["unknown"] += 1
-
-                    if classification == "UNKNOWN":
-                        duration_minutes = (
-                            duration.total_seconds() / 60
-                        )
-                        missing_bars = 0
-                    else:
-                        duration_minutes = (
-                            open_slots * BAR_INTERVAL_MINUTES
-                        )
-                        missing_bars = open_slots
-
-                    gap_records.append(
-                        (
-                            symbol,
-                            previous,
-                            timestamp,
-                            duration_minutes,
-                            missing_bars,
-                            classification,
-                        )
-                    )
-
-            # 新しい欠損履歴をまとめて登録する。
+            # 欠損履歴を同じDB接続内で登録する。
             if gap_records:
                 cur.executemany(
                     insert_sql,
                     gap_records,
                 )
 
-    # 検査結果を表示する。
     print("\n========== PROJECT ORION ==========")
     print("       RECENT DATA QUALITY CHECK")
     print("===================================")
     print(f"検査対象期間: 直近{CHECK_HOURS}時間")
-    print(f"検査時刻: {checked_at if rows else 'データなし'}")
+    print(f"検査時刻: {checked_at}")
 
     for symbol in SYMBOLS:
         result = results[symbol]
@@ -310,6 +328,7 @@ def check_recent_data():
         print(f"価格整合性エラー     : {result['invalid']}")
         print(f"5分未満の間隔        : {result['short']}")
         print(f"5分超の間隔          : {result['long']}")
+        print(f"境界をまたぐ空白     : {result['boundary_gap']}")
         print(f"MARKET_CLOSED       : {result['market_closed']}")
         print(f"SOURCE_GAP          : {result['source_gap']}")
         print(f"UNKNOWN             : {result['unknown']}")
@@ -328,6 +347,9 @@ def check_recent_data():
             or result["unknown"] > 0
         ):
             print("判定: 欠損または原因不明の空白があります")
+
+        elif result["boundary_gap"] > 0:
+            print("判定: 境界をまたぐ空白があります。全履歴検査で確認してください")
 
         else:
             print("判定: 直近データの基本チェック合格")

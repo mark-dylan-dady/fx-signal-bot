@@ -1,5 +1,7 @@
-
+import math
 import os
+from collections import defaultdict
+from statistics import median
 
 import psycopg
 
@@ -8,6 +10,14 @@ HORIZONS_MINUTES = (5, 15, 30, 60)
 
 # 変化なしと判定する範囲（％）
 FLAT_THRESHOLD = 0.001
+
+
+def is_finite_number(value):
+    """値を有限数として安全に扱えるか確認する。"""
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def report_evaluation_results():
@@ -40,62 +50,47 @@ def report_evaluation_results():
         print("No evaluation data available.")
         return
 
-    print(f"\nTotal evaluations: {len(rows)}")
+    # 価格変化率が有限数でない行は集計から除外する。
+    valid_rows = [
+        row for row in rows
+        if is_finite_number(row[4])
+    ]
+    invalid_change_count = len(rows) - len(valid_rows)
 
-    symbols = sorted(set(row[0] for row in rows))
+    print(f"Evaluation rows retrieved : {len(rows)}")
+    print(f"Valid evaluations         : {len(valid_rows)}")
+    print(f"Invalid price changes     : {invalid_change_count}")
+
+    if not valid_rows:
+        print("No valid evaluation data available.")
+        return
+
+    symbols = sorted(set(row[0] for row in valid_rows))
 
     for symbol in symbols:
-        print("\n" + "-" * 78)
+        print("\\n" + "-" * 78)
         print(f"SYMBOL: {symbol}")
         print("-" * 78)
 
         for horizon in HORIZONS_MINUTES:
             selected = [
-                row for row in rows
+                row for row in valid_rows
                 if row[0] == symbol and row[3] == horizon
             ]
 
             if not selected:
-                print(f"\n{horizon} minutes: No data")
+                print(f"\\n{horizon} minutes: No data")
                 continue
 
             changes = [float(row[4]) for row in selected]
-            ratios = [float(row[2]) for row in selected]
-
             count = len(changes)
+
             average = sum(changes) / count
+            median_change = median(changes)
 
-            up = sum(
-                1 for value in changes
-                if value > FLAT_THRESHOLD
-            )
-
-            down = sum(
-                1 for value in changes
-                if value < -FLAT_THRESHOLD
-            )
-
+            up = sum(1 for value in changes if value > FLAT_THRESHOLD)
+            down = sum(1 for value in changes if value < -FLAT_THRESHOLD)
             flat = count - up - down
 
             max_up = max(changes)
             max_down = min(changes)
-
-            avg_ratio = sum(ratios) / len(ratios)
-
-            print(f"\n[{horizon} MINUTES]")
-            print(f"  Evaluations       : {count}")
-            print(f"  Average change    : {average:+.5f}%")
-            print(f"  Up                : {up} ({up/count*100:.1f}%)")
-            print(f"  Down              : {down} ({down/count*100:.1f}%)")
-            print(f"  Flat              : {flat} ({flat/count*100:.1f}%)")
-            print(f"  Maximum up        : {max_up:+.5f}%")
-            print(f"  Maximum down      : {max_down:+.5f}%")
-            print(f"  Average alert ratio: {avg_ratio:.2f}x")
-
-    print("\n" + "=" * 78)
-    print("PROJECT ORION: ANALYSIS COMPLETE")
-    print("=" * 78)
-
-
-if __name__ == "__main__":
-    report_evaluation_results()

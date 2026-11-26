@@ -34,7 +34,7 @@ jobs:
         run: python -m pip install "psycopg[binary]"
 
       - name: Compile research modules
-        run: python -m py_compile fx_research/detect_market_changes.py fx_research/report_pre_alert_market_state.py fx_research/report_market_state_comparison.py
+        run: python -m compileall -q fx_research
 
       - name: Run pure-logic unit tests
         run: python -m unittest discover -s tests -v

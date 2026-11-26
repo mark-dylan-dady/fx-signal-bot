@@ -1,0 +1,40 @@
+name: ORION DB-free checks
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "fx_research/**"
+      - "tests/**"
+      - ".github/workflows/orion_db_free_checks.yml"
+  push:
+    branches: [repair-orion-research-scripts]
+    paths:
+      - "fx_research/**"
+      - "tests/**"
+      - ".github/workflows/orion_db_free_checks.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  db-free-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install only the database driver (no database connection)
+        run: python -m pip install "psycopg[binary]"
+
+      - name: Compile research modules
+        run: python -m compileall -q fx_research
+
+      - name: Run pure-logic unit tests
+        run: python -m unittest discover -s tests -v

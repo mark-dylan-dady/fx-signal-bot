@@ -11,6 +11,11 @@ from fx_research.report_pre_alert_market_state import (
     is_valid_price,
 )
 from fx_research.report_market_state_comparison import calculate_statistics
+from fx_research.check_data import classify_gap, is_market_open
+from fx_research.evaluate_alerts import (
+    check_interval_continuity,
+    is_valid_price as evaluation_is_valid_price,
+)
 
 
 class OrionPureLogicTests(unittest.TestCase):
@@ -58,6 +63,45 @@ class OrionPureLogicTests(unittest.TestCase):
         self.assertEqual(state, "HIGH")
         self.assertIsNotNone(ratio)
         self.assertGreater(ratio, 1.5)
+
+    def test_market_hours_and_gap_classification(self):
+        friday_open = datetime(2026, 11, 6, 21, 55, tzinfo=timezone.utc)
+        friday_closed = datetime(2026, 11, 6, 22, 5, tzinfo=timezone.utc)
+        sunday_closed = datetime(2026, 11, 8, 21, 55, tzinfo=timezone.utc)
+        sunday_open = datetime(2026, 11, 8, 22, 0, tzinfo=timezone.utc)
+
+        self.assertTrue(is_market_open(friday_open))
+        self.assertFalse(is_market_open(friday_closed))
+        self.assertFalse(is_market_open(sunday_closed))
+        self.assertTrue(is_market_open(sunday_open))
+
+        classification, missing = classify_gap(
+            datetime(2026, 11, 6, 21, 40, tzinfo=timezone.utc),
+            datetime(2026, 11, 6, 22, 10, tzinfo=timezone.utc),
+            timedelta(minutes=30),
+        )
+        self.assertEqual(classification, "SOURCE_GAP")
+        self.assertEqual(missing, 3)
+
+    def test_alert_evaluation_price_and_interval_checks(self):
+        self.assertTrue(evaluation_is_valid_price("150.25"))
+        for value in (None, "bad", 0, -1, float("nan"), float("inf")):
+            self.assertFalse(evaluation_is_valid_price(value))
+
+        alert_time = datetime(2026, 11, 9, 14, 0, tzinfo=timezone.utc)
+        target_time = alert_time + timedelta(minutes=10)
+        actual = [alert_time + timedelta(minutes=10)]
+        missing = check_interval_continuity(alert_time, target_time, actual)
+        self.assertEqual(missing, [alert_time + timedelta(minutes=5)])
+
+        complete = [
+            alert_time + timedelta(minutes=5),
+            alert_time + timedelta(minutes=10),
+        ]
+        self.assertEqual(
+            check_interval_continuity(alert_time, target_time, complete),
+            [],
+        )
 
     def test_statistics_for_up_down_unknown_and_empty(self):
         up = calculate_statistics([0.01, -0.002, 0.0], "UP")

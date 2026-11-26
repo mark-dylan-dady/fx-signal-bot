@@ -167,6 +167,9 @@ def detect_market_changes():
 
             ratio = change_pct / baseline
 
+            if not math.isfinite(ratio):
+                continue
+
             if ratio >= CHANGE_MULTIPLIER:
                 alerts.append(
                     (

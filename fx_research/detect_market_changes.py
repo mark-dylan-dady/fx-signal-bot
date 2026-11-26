@@ -1,3 +1,4 @@
+
 import math
 import os
 from collections import defaultdict
@@ -16,17 +17,13 @@ def is_valid_price(value):
     """価格が正の有限数か確認する。"""
     try:
         price = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False
-
     return math.isfinite(price) and price > 0
 
 
 def save_alerts(alerts):
-    """全通貨ペアのアラートをまとめてDBに保存する。"""
-    if not alerts:
-        return 0
-
+    """検出したアラートをDBに保存する。"""
     database_url = os.environ["DATABASE_URL"]
 
     query = """
@@ -41,6 +38,9 @@ def save_alerts(alerts):
         VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT (symbol, alert_timestamp) DO NOTHING
     """
+
+    if not alerts:
+        return 0
 
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
@@ -82,10 +82,10 @@ def detect_market_changes():
         print("No price data found.")
         return
 
-    all_alerts = []
+    total_saved = 0
 
     for symbol, bars in sorted(grouped.items()):
-        print(f"\\n=== {symbol} ===")
+        print(f"\n=== {symbol} ===")
 
         returns = []
 
@@ -93,4 +93,125 @@ def detect_market_changes():
             previous_time, previous_close = previous
             current_time, current_close = current
 
-            # 欠損区間をまたぐ価格変化は計算しない。
+            # Skip gaps: only compare consecutive 5-minute bars.
+            if (
+                current_time - previous_time
+            ).total_seconds() != 300:
+                continue
+
+            if not is_valid_price(previous_close):
+                continue
+            if not is_valid_price(current_close):
+                continue
+
+            previous_close = float(previous_close)
+            current_close = float(current_close)
+
+            # Signed return preserves price direction.
+            signed_change_pct = (
+                (current_close - previous_close)
+                / previous_close
+            ) * 100
+
+            if not math.isfinite(signed_change_pct):
+                continue
+
+            # Magnitude is used for unusual-movement detection.
+            change_pct = abs(signed_change_pct)
+
+            if signed_change_pct > 0:
+                direction = "UP"
+            elif signed_change_pct < 0:
+                direction = "DOWN"
+            else:
+                direction = "UNKNOWN"
+
+            returns.append(
+                (
+                    current_time,
+                    change_pct,
+                    direction,
+                )
+            )
+
+        if len(returns) < BASELINE_RETURNS + 1:
+            print(
+                f"Not enough valid returns: {len(returns)}"
+            )
+            continue
+
+        latest_time = returns[-1][0]
+        cutoff_time = (
+            latest_time.timestamp() - RECENT_HOURS * 3600
+        )
+
+        alerts = []
+
+        for i, (timestamp, change_pct, direction) in enumerate(returns):
+            if timestamp.timestamp() < cutoff_time:
+                continue
+
+            # Use only earlier returns for the baseline.
+            history = [
+                value
+                for _, value, _ in returns[:i]
+            ][-BASELINE_RETURNS:]
+
+            if len(history) < 30:
+                continue
+
+            baseline = median(history)
+
+            if baseline <= 0:
+                continue
+
+            ratio = change_pct / baseline
+
+            if ratio >= CHANGE_MULTIPLIER:
+                alerts.append(
+                    (
+                        symbol,
+                        timestamp,
+                        change_pct,
+                        baseline,
+                        ratio,
+                        direction,
+                    )
+                )
+
+        print(f"Latest data: {latest_time}")
+        print(f"Valid 5-minute returns: {len(returns)}")
+        print(
+            f"Alerts in last {RECENT_HOURS} hours: {len(alerts)}"
+        )
+
+        if not alerts:
+            print("No unusual movements detected.")
+            continue
+
+        saved_count = save_alerts(alerts)
+        total_saved += saved_count
+
+        print(f"New alerts saved: {saved_count}")
+
+        for (
+            _,
+            timestamp,
+            change_pct,
+            baseline,
+            ratio,
+            direction,
+        ) in alerts:
+            print(
+                f"ALERT | {timestamp} | "
+                f"direction={direction} | "
+                f"change={change_pct:.5f}% | "
+                f"median={baseline:.5f}% | "
+                f"ratio={ratio:.2f}x"
+            )
+
+    print(f"\nTotal new alerts saved: {total_saved}")
+
+
+if __name__ == "__main__":
+    detect_market_changes()

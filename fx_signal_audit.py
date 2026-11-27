@@ -98,8 +98,8 @@ def analyze_pair(pair):
             })
             continue
 
-        pos = market.index.get_loc(matches[0])
-        if not isinstance(pos, int) or pos + 1 >= len(market):
+        pos = int(market.index.get_loc(matches[0]))
+        if pos + 1 >= len(market):
             continue
 
         next_bar = market.iloc[pos + 1]

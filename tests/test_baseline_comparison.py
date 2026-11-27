@@ -44,7 +44,7 @@ class BaselineComparisonTests(unittest.TestCase):
         returns = [
             (
                 start + timedelta(minutes=5 * index),
-                0.01,
+                0.04 if index == 39 else 0.01,
                 "UP",
             )
             for index in range(40)

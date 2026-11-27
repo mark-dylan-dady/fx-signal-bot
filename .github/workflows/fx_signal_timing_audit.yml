@@ -1,6 +1,12 @@
 name: FX Signal Timing Audit (No LINE)
 
 on:
+  push:
+    branches:
+      - fx-signal-audit
+    paths:
+      - "fx_signal_timing_audit.py"
+      - ".github/workflows/fx_signal_timing_audit.yml"
   workflow_dispatch:
 
 permissions:

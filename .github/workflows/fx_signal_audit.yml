@@ -1,0 +1,46 @@
+name: FX Signal Audit
+
+on:
+  push:
+    branches:
+      - fx-signal-audit
+    paths:
+      - "fx_signal_audit.py"
+      - "fx_signal.py"
+      - "signals_history_*.csv"
+      - ".github/workflows/fx_signal_audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out audit branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests yfinance python-dotenv
+
+      - name: Run historical execution audit
+        run: python fx_signal_audit.py
+
+      - name: Upload audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fx-signal-audit-results
+          path: |
+            audit_trade_comparison.csv
+            audit_summary.csv
+          if-no-files-found: warn
+          retention-days: 14

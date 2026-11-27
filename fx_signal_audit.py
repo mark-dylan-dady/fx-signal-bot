@@ -9,18 +9,10 @@
 from pathlib import Path
 
 import pandas as pd
-import yfinance as yf
 
-from fx_signal import (
-    COST_YEN,
-    MAX_BARS,
-    PAIRS,
-    build_signals,
-    calc_tp_sl,
-    judge_trade,
-)
+from fx_signal import MAX_BARS, PAIRS, build_signals, calc_tp_sl, judge_trade
 
-# 現行コストに加え、コストが増えた場合の感度を見る
+# 片道ではなく、取引全体に対する簡易コスト控除額（円）
 COST_SCENARIOS = {
     "cost_0.5pip": 0.005,
     "cost_1.0pip": 0.010,
@@ -47,9 +39,7 @@ def judge_with_cost(sig_type, entry, tp, sl, future_df, cost_yen):
 
     if len(future_df) >= MAX_BARS:
         last_close = float(future_df["Close"].iloc[-1])
-        raw_pnl = (
-            last_close - entry if sig_type == "BUY" else entry - last_close
-        )
+        raw_pnl = last_close - entry if sig_type == "BUY" else entry - last_close
         return "TIMEOUT", raw_pnl - cost_yen
 
     return "PENDING", float("nan")
@@ -58,18 +48,6 @@ def judge_with_cost(sig_type, entry, tp, sl, future_df, cost_yen):
 def summarize_rows(rows, scenario_name):
     """完了取引だけを集計。TIMEOUTも勝率の分母に含める。"""
     df = pd.DataFrame(rows)
-    if df.empty:
-        return {
-            "Scenario": scenario_name,
-            "Count": 0,
-            "Wins": 0,
-            "Losses": 0,
-            "Timeouts": 0,
-            "WinRate_pct": float("nan"),
-            "TotalPnL_pips": 0.0,
-            "AveragePnL_pips": float("nan"),
-        }
-
     done = df[df["Result"].isin(["WIN", "LOSE", "TIMEOUT"])]
     count = len(done)
     wins = int((done["Result"] == "WIN").sum())
@@ -100,13 +78,12 @@ def analyze_pair(pair):
     if history.empty:
         return [], []
 
-    # build_signals と同じデータ取得・指標計算を利用。元ファイルは変更しない。
+    # 元のシグナル計算を再利用。fx_signal.py 自体は変更しない。
     market, market_jst = build_signals(pair)
     market = market.copy()
     market.index = market_jst.tz_localize(None)
 
     details = []
-    summaries = []
 
     for _, signal in history.iterrows():
         sig_time = pd.to_datetime(signal["Timestamp"])
@@ -114,13 +91,9 @@ def analyze_pair(pair):
         matches = market.index[market.index == sig_time]
         if len(matches) == 0:
             details.append({
-                "Pair": label,
-                "Timestamp": sig_time,
-                "Type": sig_type,
-                "Scenario": "DATA_NOT_FOUND",
-                "Entry_yen": float("nan"),
-                "Result": "DATA_NOT_FOUND",
-                "PnL_yen": float("nan"),
+                "Pair": label, "Timestamp": sig_time, "Type": sig_type,
+                "Scenario": "DATA_NOT_FOUND", "Entry_yen": float("nan"),
+                "Result": "DATA_NOT_FOUND", "PnL_yen": float("nan"),
                 "Note": "Yahoo取得データ内にシグナル足が見つからない",
             })
             continue
@@ -129,31 +102,39 @@ def analyze_pair(pair):
         if not isinstance(pos, int) or pos + 1 >= len(market):
             continue
 
-        signal_bar = market.iloc[pos]
         next_bar = market.iloc[pos + 1]
         atr = float(signal["ATR"])
         if pd.isna(atr):
             continue
 
-        # A: CSVに保存されたシグナル足終値を使う従来条件
+        # 0: CSVに実際に保存されている過去の判定結果（比較の基準）
+        details.append({
+            "Pair": label, "Timestamp": sig_time, "Type": sig_type,
+            "Scenario": "csv_recorded",
+            "Entry_yen": float(signal["Entry"]),
+            "Result": str(signal["Result"]),
+            "PnL_yen": pd.to_numeric(signal["PnL"], errors="coerce"),
+            "Note": "保存済みCSVの結果。再計算値ではない",
+        })
+
+        # 1: 保存済みEntry/TP/SLを、現在取得できるYahoo足で再判定
         old_entry = float(signal["Entry"])
-        old_tp, old_sl, _, _ = calc_tp_sl(old_entry, atr, sig_type)
+        old_tp = float(signal["TP"])
+        old_sl = float(signal["SL"])
         old_future = market.iloc[pos + 1 : pos + 1 + MAX_BARS]
         old_result, old_pnl = judge_trade(
             sig_type, old_entry, old_tp, old_sl, old_future
         )
         details.append({
-            "Pair": label,
-            "Timestamp": sig_time,
-            "Type": sig_type,
-            "Scenario": "signal_close_original_cost",
+            "Pair": label, "Timestamp": sig_time, "Type": sig_type,
+            "Scenario": "signal_close_rechecked",
             "Entry_yen": old_entry,
             "Result": old_result or "PENDING",
             "PnL_yen": old_pnl,
-            "Note": "シグナル足終値。現行ロジックで再判定",
+            "Note": "保存済みEntry/TP/SLを使い、現在の取得データで再判定",
         })
 
-        # B: 次の5分足始値で約定したと仮定。TP/SLも約定価格から再設定。
+        # 2: 次の5分足始値で約定した仮定。TP/SLも新Entryから再設定。
         next_entry = float(next_bar["Open"])
         next_tp, next_sl, _, _ = calc_tp_sl(next_entry, atr, sig_type)
         next_future = market.iloc[pos + 1 : pos + 1 + MAX_BARS]
@@ -163,26 +144,25 @@ def analyze_pair(pair):
                 sig_type, next_entry, next_tp, next_sl, next_future, cost
             )
             details.append({
-                "Pair": label,
-                "Timestamp": sig_time,
-                "Type": sig_type,
+                "Pair": label, "Timestamp": sig_time, "Type": sig_type,
                 "Scenario": f"next_5m_open_{scenario}",
-                "Entry_yen": next_entry,
-                "Result": result,
-                "PnL_yen": pnl,
+                "Entry_yen": next_entry, "Result": result, "PnL_yen": pnl,
                 "Note": "次の5分足始値で約定した仮定。実際のBid/Askではない",
             })
 
     detail_df = pd.DataFrame(details)
-    for scenario in detail_df["Scenario"].dropna().unique() if not detail_df.empty else []:
-        if scenario == "DATA_NOT_FOUND":
-            continue
-        scenario_rows = detail_df[
-            (detail_df["Pair"] == label) & (detail_df["Scenario"] == scenario)
-        ].to_dict("records")
-        summary = summarize_rows(scenario_rows, f"{label}_{scenario}")
-        summary["Pair"] = label
-        summaries.append(summary)
+    summaries = []
+    if not detail_df.empty:
+        for scenario in detail_df["Scenario"].dropna().unique():
+            if scenario == "DATA_NOT_FOUND":
+                continue
+            scenario_rows = detail_df[
+                (detail_df["Pair"] == label)
+                & (detail_df["Scenario"] == scenario)
+            ].to_dict("records")
+            summary = summarize_rows(scenario_rows, f"{label}_{scenario}")
+            summary["Pair"] = label
+            summaries.append(summary)
 
     return details, summaries
 

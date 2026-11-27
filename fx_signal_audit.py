@@ -1,6 +1,8 @@
 """旧FXシグナルの約定価格・コスト感度を検証する独立スクリプト。
 
 本番の fx_signal.py / workflow / LINE 通知は変更しない。
+遅延約定シナリオでは、通知された元のTP/SLを固定し、
+次の5分足始値を仮の約定価格として評価する。
 実行: python fx_signal_audit.py
 必要: pandas, yfinance
 出力: audit_trade_comparison.csv, audit_summary.csv
@@ -10,9 +12,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from fx_signal import MAX_BARS, PAIRS, build_signals, calc_tp_sl, judge_trade
+from fx_signal import MAX_BARS, PAIRS, build_signals, judge_trade
 
-# 片道ではなく、取引全体に対する簡易コスト控除額（円）
 COST_SCENARIOS = {
     "cost_0.5pip": 0.005,
     "cost_1.0pip": 0.010,
@@ -22,8 +23,25 @@ OUTPUT_DETAIL = Path("audit_trade_comparison.csv")
 OUTPUT_SUMMARY = Path("audit_summary.csv")
 
 
-def judge_with_cost(sig_type, entry, tp, sl, future_df, cost_yen):
-    """現行と同じ足内判定。TP/SL同時到達は保守的にLOSE。"""
+def judge_delayed_entry(sig_type, entry, tp, sl, future_df, cost_yen):
+    """元のTP/SLを固定して遅延Entryを判定。未到達の目標を追いかけない。"""
+    if future_df.empty:
+        return "PENDING", float("nan")
+
+    first_open = float(future_df["Open"].iloc[0])
+
+    # 次足始値の時点ですでに目標到達済みなら、追いかけエントリーはしない。
+    if sig_type == "BUY":
+        if first_open >= tp:
+            return "MISSED_TP", float("nan")
+        if first_open <= sl:
+            return "MISSED_SL", float("nan")
+    else:
+        if first_open <= tp:
+            return "MISSED_TP", float("nan")
+        if first_open >= sl:
+            return "MISSED_SL", float("nan")
+
     for _, bar in future_df.iterrows():
         high = float(bar["High"])
         low = float(bar["Low"])
@@ -32,10 +50,11 @@ def judge_with_cost(sig_type, entry, tp, sl, future_df, cost_yen):
         else:
             hit_tp, hit_sl = low <= tp, high >= sl
 
+        # 同一足で両方に触れた場合は保守的にSLを優先。
         if hit_sl:
-            return "LOSE", -abs(entry - sl) - cost_yen
+            return "LOSE", (sl - entry if sig_type == "BUY" else entry - sl) - cost_yen
         if hit_tp:
-            return "WIN", abs(tp - entry) - cost_yen
+            return "WIN", (tp - entry if sig_type == "BUY" else entry - tp) - cost_yen
 
     if len(future_df) >= MAX_BARS:
         last_close = float(future_df["Close"].iloc[-1])
@@ -46,14 +65,14 @@ def judge_with_cost(sig_type, entry, tp, sl, future_df, cost_yen):
 
 
 def summarize_rows(rows, scenario_name):
-    """完了取引だけを集計。TIMEOUTも勝率の分母に含める。"""
+    """約定した完了取引を集計。未約定で見送った件数は別欄にする。"""
     df = pd.DataFrame(rows)
-    done = df[df["Result"].isin(["WIN", "LOSE", "TIMEOUT"])]
-    count = len(done)
-    wins = int((done["Result"] == "WIN").sum())
-    losses = int((done["Result"] == "LOSE").sum())
-    timeouts = int((done["Result"] == "TIMEOUT").sum())
-    pnl_pips = pd.to_numeric(done["PnL_yen"], errors="coerce") * 100
+    countable = df[df["Result"].isin(["WIN", "LOSE", "TIMEOUT"])]
+    count = len(countable)
+    wins = int((countable["Result"] == "WIN").sum())
+    losses = int((countable["Result"] == "LOSE").sum())
+    timeouts = int((countable["Result"] == "TIMEOUT").sum())
+    pnl_pips = pd.to_numeric(countable["PnL_yen"], errors="coerce") * 100
 
     return {
         "Scenario": scenario_name,
@@ -61,6 +80,8 @@ def summarize_rows(rows, scenario_name):
         "Wins": wins,
         "Losses": losses,
         "Timeouts": timeouts,
+        "MissedTP": int((df["Result"] == "MISSED_TP").sum()),
+        "MissedSL": int((df["Result"] == "MISSED_SL").sum()),
         "WinRate_pct": round(wins / count * 100, 2) if count else float("nan"),
         "TotalPnL_pips": round(pnl_pips.sum(), 2),
         "AveragePnL_pips": round(pnl_pips.mean(), 2) if count else float("nan"),
@@ -78,11 +99,9 @@ def analyze_pair(pair):
     if history.empty:
         return [], []
 
-    # 元のシグナル計算を再利用。fx_signal.py 自体は変更しない。
     market, market_jst = build_signals(pair)
     market = market.copy()
     market.index = market_jst.tz_localize(None)
-
     details = []
 
     for _, signal in history.iterrows():
@@ -93,6 +112,7 @@ def analyze_pair(pair):
             details.append({
                 "Pair": label, "Timestamp": sig_time, "Type": sig_type,
                 "Scenario": "DATA_NOT_FOUND", "Entry_yen": float("nan"),
+                "OriginalTP_yen": float("nan"), "OriginalSL_yen": float("nan"),
                 "Result": "DATA_NOT_FOUND", "PnL_yen": float("nan"),
                 "Note": "Yahoo取得データ内にシグナル足が見つからない",
             })
@@ -102,52 +122,43 @@ def analyze_pair(pair):
         if pos + 1 >= len(market):
             continue
 
-        next_bar = market.iloc[pos + 1]
-        atr = float(signal["ATR"])
-        if pd.isna(atr):
-            continue
+        old_entry = float(signal["Entry"])
+        old_tp = float(signal["TP"])
+        old_sl = float(signal["SL"])
+        next_entry = float(market.iloc[pos + 1]["Open"])
+        future = market.iloc[pos + 1 : pos + 1 + MAX_BARS]
 
-        # 0: CSVに実際に保存されている過去の判定結果（比較の基準）
+        # CSV保存結果は比較基準としてそのまま記録。
         details.append({
             "Pair": label, "Timestamp": sig_time, "Type": sig_type,
-            "Scenario": "csv_recorded",
-            "Entry_yen": float(signal["Entry"]),
+            "Scenario": "csv_recorded", "Entry_yen": old_entry,
+            "OriginalTP_yen": old_tp, "OriginalSL_yen": old_sl,
             "Result": str(signal["Result"]),
             "PnL_yen": pd.to_numeric(signal["PnL"], errors="coerce"),
             "Note": "保存済みCSVの結果。再計算値ではない",
         })
 
-        # 1: 保存済みEntry/TP/SLを、現在取得できるYahoo足で再判定
-        old_entry = float(signal["Entry"])
-        old_tp = float(signal["TP"])
-        old_sl = float(signal["SL"])
-        old_future = market.iloc[pos + 1 : pos + 1 + MAX_BARS]
-        old_result, old_pnl = judge_trade(
-            sig_type, old_entry, old_tp, old_sl, old_future
-        )
+        # 元のEntry/TP/SLをYahoo足で再判定。
+        old_result, old_pnl = judge_trade(sig_type, old_entry, old_tp, old_sl, future)
         details.append({
             "Pair": label, "Timestamp": sig_time, "Type": sig_type,
-            "Scenario": "signal_close_rechecked",
-            "Entry_yen": old_entry,
-            "Result": old_result or "PENDING",
-            "PnL_yen": old_pnl,
-            "Note": "保存済みEntry/TP/SLを使い、現在の取得データで再判定",
+            "Scenario": "signal_close_rechecked", "Entry_yen": old_entry,
+            "OriginalTP_yen": old_tp, "OriginalSL_yen": old_sl,
+            "Result": old_result or "PENDING", "PnL_yen": old_pnl,
+            "Note": "保存済みEntry/TP/SLを現在の取得データで再判定",
         })
 
-        # 2: 次の5分足始値で約定した仮定。TP/SLも新Entryから再設定。
-        next_entry = float(next_bar["Open"])
-        next_tp, next_sl, _, _ = calc_tp_sl(next_entry, atr, sig_type)
-        next_future = market.iloc[pos + 1 : pos + 1 + MAX_BARS]
-
+        # 遅延シナリオ：Entryだけ次足始値へ変更し、TP/SLは通知時の水準に固定。
         for scenario, cost in COST_SCENARIOS.items():
-            result, pnl = judge_with_cost(
-                sig_type, next_entry, next_tp, next_sl, next_future, cost
+            result, pnl = judge_delayed_entry(
+                sig_type, next_entry, old_tp, old_sl, future, cost
             )
             details.append({
                 "Pair": label, "Timestamp": sig_time, "Type": sig_type,
-                "Scenario": f"next_5m_open_{scenario}",
-                "Entry_yen": next_entry, "Result": result, "PnL_yen": pnl,
-                "Note": "次の5分足始値で約定した仮定。実際のBid/Askではない",
+                "Scenario": f"next_5m_open_fixed_levels_{scenario}",
+                "Entry_yen": next_entry, "OriginalTP_yen": old_tp,
+                "OriginalSL_yen": old_sl, "Result": result, "PnL_yen": pnl,
+                "Note": "次足始値で仮約定。通知時のTP/SL固定。MISSEDは見送り扱い。実Bid/Askではない",
             })
 
     detail_df = pd.DataFrame(details)
@@ -188,7 +199,8 @@ def main():
         summary_df = summary_df[
             [
                 "Pair", "Scenario", "Count", "Wins", "Losses", "Timeouts",
-                "WinRate_pct", "TotalPnL_pips", "AveragePnL_pips",
+                "MissedTP", "MissedSL", "WinRate_pct",
+                "TotalPnL_pips", "AveragePnL_pips",
             ]
         ]
         summary_df.to_csv(OUTPUT_SUMMARY, index=False)

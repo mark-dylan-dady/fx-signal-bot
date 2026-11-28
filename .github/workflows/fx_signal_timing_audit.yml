@@ -10,6 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -35,6 +36,8 @@ jobs:
       - name: Run timing diagnostic (LINE disabled)
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: python fx_signal_timing_audit.py
 
       - name: Upload timing results

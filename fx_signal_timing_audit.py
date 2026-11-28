@@ -1,7 +1,7 @@
-"""LINE送信なしでYahoo取得・シグナル検出の所要時間を測る診断専用スクリプト。
+"""LINE送信なしでGitHub待ち時間・Yahoo取得・シグナル検出時間を測る診断専用スクリプト。
 
 本番の fx_signal.py の main/process_pair は呼び出さない。
-LINE APIへの通信、履歴CSVの読み書きも行わない。
+LINE APIへの通信、履歴CSVの読み書きは行わない。
 """
 
 import os
@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import requests
 import fx_signal
 
 OUTPUT_RUN = Path("timing_audit_run.csv")
@@ -30,6 +31,50 @@ def iso_jst(value):
     return value.tz_convert("Asia/Tokyo").isoformat() if hasattr(value, "tz_convert") else value.astimezone(
         __import__("zoneinfo").ZoneInfo("Asia/Tokyo")
     ).isoformat()
+
+
+def get_github_run_metadata():
+    """GitHub Actionsの作成時刻・開始時刻を取得。取得失敗時も診断自体は続行する。"""
+    run_id = os.getenv("GITHUB_RUN_ID", "")
+    repository = os.getenv("GITHUB_REPOSITORY", "")
+    token = os.getenv("GITHUB_TOKEN", "")
+    if not (run_id and repository and token):
+        return {"GitHubRunCreatedUTC": "", "GitHubRunStartedUTC": "",
+                "GitHubQueueWaitSeconds": float("nan"),
+                "GitHubStartToScriptSeconds": float("nan"),
+                "GitHubMetadataError": "必要なGitHub環境変数がありません"}
+
+    url = f"https://api.github.com/repos/{repository}/actions/runs/{run_id}"
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        created = pd.Timestamp(data["created_at"])
+        started = pd.Timestamp(data["run_started_at"])
+        script_started = pd.Timestamp(utc_now())
+        return {
+            "GitHubRunCreatedUTC": created.isoformat(),
+            "GitHubRunStartedUTC": started.isoformat(),
+            "GitHubQueueWaitSeconds": round((started - created).total_seconds(), 3),
+            "GitHubStartToScriptSeconds": round((script_started - started).total_seconds(), 3),
+            "GitHubMetadataError": "",
+        }
+    except Exception as exc:
+        return {
+            "GitHubRunCreatedUTC": "",
+            "GitHubRunStartedUTC": "",
+            "GitHubQueueWaitSeconds": float("nan"),
+            "GitHubStartToScriptSeconds": float("nan"),
+            "GitHubMetadataError": f"{type(exc).__name__}: {exc}",
+        }
 
 
 # Yahooへの各リクエストをラップして、開始・終了時刻と所要時間を記録する。
@@ -60,6 +105,7 @@ def main():
     run_started = utc_now()
     run_clock = time.monotonic()
     run_id = os.getenv("GITHUB_RUN_ID", "local")
+    github_metadata = get_github_run_metadata()
     run_rows = []
     event_rows = []
 
@@ -129,11 +175,12 @@ def main():
     run_finished = utc_now()
     run_summary = {
         "RunID": run_id,
-        "RunStartedUTC": iso_utc(run_started),
-        "RunFinishedUTC": iso_utc(run_finished),
+        "ScriptStartedUTC": iso_utc(run_started),
+        "ScriptFinishedUTC": iso_utc(run_finished),
         "RunElapsedSeconds": round(time.monotonic() - run_clock, 3),
         "PairsProcessed": len(run_rows),
         "SignalsFound": len(event_rows),
+        **github_metadata,
         "Note": "Diagnostic only: no LINE API calls and no signal-history CSV access.",
     }
 

@@ -33,7 +33,7 @@ def iso_jst(value):
     ).isoformat()
 
 
-def get_github_run_metadata():
+def get_github_run_metadata(script_started):
     """GitHubのジョブ開始時刻からrunner待ち時間を取得する。失敗時も診断は続行。"""
     run_id = os.getenv("GITHUB_RUN_ID", "")
     repository = os.getenv("GITHUB_REPOSITORY", "")
@@ -41,7 +41,7 @@ def get_github_run_metadata():
     empty = {
         "GitHubRunCreatedUTC": "",
         "GitHubJobStartedUTC": "",
-        "GitHubRunnerQueueWaitSeconds": float("nan"),
+        "GitHubRunCreatedToJobStartSeconds": float("nan"),
         "GitHubJobStartToScriptSeconds": float("nan"),
         "GitHubMetadataError": "",
     }
@@ -69,11 +69,11 @@ def get_github_run_metadata():
 
         created = pd.Timestamp(run_data["created_at"])
         job_started = min(starts)
-        script_started = pd.Timestamp(utc_now())
+        script_started = pd.Timestamp(script_started)
         empty.update({
             "GitHubRunCreatedUTC": created.isoformat(),
             "GitHubJobStartedUTC": job_started.isoformat(),
-            "GitHubRunnerQueueWaitSeconds": round((job_started - created).total_seconds(), 3),
+            "GitHubRunCreatedToJobStartSeconds": round((job_started - created).total_seconds(), 3),
             "GitHubJobStartToScriptSeconds": round((script_started - job_started).total_seconds(), 3),
         })
         return empty
@@ -109,7 +109,7 @@ def main():
     run_started = utc_now()
     run_clock = time.monotonic()
     run_id = os.getenv("GITHUB_RUN_ID", "local")
-    github_metadata = get_github_run_metadata()
+    github_metadata = get_github_run_metadata(run_started)
     run_rows = []
     event_rows = []
 

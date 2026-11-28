@@ -34,48 +34,52 @@ def iso_jst(value):
 
 
 def get_github_run_metadata():
-    """GitHub Actionsの作成時刻・開始時刻を取得。取得失敗時も診断自体は続行する。"""
+    """GitHubのジョブ開始時刻からrunner待ち時間を取得する。失敗時も診断は続行。"""
     run_id = os.getenv("GITHUB_RUN_ID", "")
     repository = os.getenv("GITHUB_REPOSITORY", "")
     token = os.getenv("GITHUB_TOKEN", "")
+    empty = {
+        "GitHubRunCreatedUTC": "",
+        "GitHubJobStartedUTC": "",
+        "GitHubRunnerQueueWaitSeconds": float("nan"),
+        "GitHubJobStartToScriptSeconds": float("nan"),
+        "GitHubMetadataError": "",
+    }
     if not (run_id and repository and token):
-        return {"GitHubRunCreatedUTC": "", "GitHubRunStartedUTC": "",
-                "GitHubQueueWaitSeconds": float("nan"),
-                "GitHubStartToScriptSeconds": float("nan"),
-                "GitHubMetadataError": "必要なGitHub環境変数がありません"}
+        empty["GitHubMetadataError"] = "必要なGitHub環境変数がありません"
+        return empty
 
-    url = f"https://api.github.com/repos/{repository}/actions/runs/{run_id}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    base = f"https://api.github.com/repos/{repository}/actions/runs/{run_id}"
     try:
-        response = requests.get(
-            url,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {token}",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-        data = response.json()
-        created = pd.Timestamp(data["created_at"])
-        started = pd.Timestamp(data["run_started_at"])
-        script_started = pd.Timestamp(utc_now())
-        return {
-            "GitHubRunCreatedUTC": created.isoformat(),
-            "GitHubRunStartedUTC": started.isoformat(),
-            "GitHubQueueWaitSeconds": round((started - created).total_seconds(), 3),
-            "GitHubStartToScriptSeconds": round((script_started - started).total_seconds(), 3),
-            "GitHubMetadataError": "",
-        }
-    except Exception as exc:
-        return {
-            "GitHubRunCreatedUTC": "",
-            "GitHubRunStartedUTC": "",
-            "GitHubQueueWaitSeconds": float("nan"),
-            "GitHubStartToScriptSeconds": float("nan"),
-            "GitHubMetadataError": f"{type(exc).__name__}: {exc}",
-        }
+        run_response = requests.get(base, headers=headers, timeout=10)
+        run_response.raise_for_status()
+        run_data = run_response.json()
 
+        jobs_response = requests.get(f"{base}/jobs", headers=headers, timeout=10)
+        jobs_response.raise_for_status()
+        jobs = jobs_response.json().get("jobs", [])
+        starts = [pd.Timestamp(job["started_at"]) for job in jobs if job.get("started_at")]
+        if not starts:
+            raise RuntimeError("GitHubジョブの開始時刻がまだ取得できません")
+
+        created = pd.Timestamp(run_data["created_at"])
+        job_started = min(starts)
+        script_started = pd.Timestamp(utc_now())
+        empty.update({
+            "GitHubRunCreatedUTC": created.isoformat(),
+            "GitHubJobStartedUTC": job_started.isoformat(),
+            "GitHubRunnerQueueWaitSeconds": round((job_started - created).total_seconds(), 3),
+            "GitHubJobStartToScriptSeconds": round((script_started - job_started).total_seconds(), 3),
+        })
+        return empty
+    except Exception as exc:
+        empty["GitHubMetadataError"] = f"{type(exc).__name__}: {exc}"
+        return empty
 
 # Yahooへの各リクエストをラップして、開始・終了時刻と所要時間を記録する。
 _original_download = fx_signal.yf.download

@@ -117,6 +117,12 @@ def main():
         pair_started = utc_now()
         pair_clock = time.monotonic()
         fetch_start_index = len(download_records)
+        latest_bar_jst = None
+        latest_bar_age_minutes = float("nan")
+        latest_bar_signal = ""
+        confirmed_bar_jst = None
+        confirmed_bar_age_minutes = float("nan")
+        confirmed_bar_signal = ""
 
         try:
             # build_signalsだけを実行。LINE送信・履歴更新処理は呼び出さない。
@@ -133,6 +139,19 @@ def main():
             )
             detection_finished = utc_now()
             detection_elapsed = time.monotonic() - detection_clock
+
+            # Yahooが返した最新足と、検出対象になる確定足の鮮度を記録する。
+            # find_signal_events() は最後の1本を未確定として除外する。
+            detected_at_jst = pd.Timestamp(detection_finished).tz_convert("Asia/Tokyo")
+            latest_bar_jst = market_jst[-1]
+            latest_bar_age_minutes = (detected_at_jst - latest_bar_jst).total_seconds() / 60
+            latest_bar_signal = int(market["Signal"].iloc[-1])
+            if len(market_jst) >= 2:
+                confirmed_bar_jst = market_jst[-2]
+                confirmed_bar_age_minutes = (
+                    detected_at_jst - confirmed_bar_jst
+                ).total_seconds() / 60
+                confirmed_bar_signal = int(market["Signal"].iloc[-2])
 
             detected_at = detection_finished
             for index, signal_type, bar_time in events:
@@ -163,6 +182,12 @@ def main():
         run_rows.append({
             "RunID": run_id,
             "Pair": pair.replace("=X", ""),
+            "LatestYahooBarJST": latest_bar_jst.isoformat() if latest_bar_jst is not None else "",
+            "LatestYahooBarAgeMinutes": round(latest_bar_age_minutes, 2),
+            "LatestBarSignal": latest_bar_signal,
+            "LastConfirmedBarJST": confirmed_bar_jst.isoformat() if confirmed_bar_jst is not None else "",
+            "LastConfirmedBarAgeMinutes": round(confirmed_bar_age_minutes, 2),
+            "LastConfirmedBarSignal": confirmed_bar_signal,
             "PairStartedUTC": iso_utc(pair_started),
             "PairFinishedUTC": iso_utc(pair_finished),
             "PairElapsedSeconds": round(time.monotonic() - pair_clock, 3),
@@ -200,6 +225,13 @@ def main():
     print(pd.DataFrame([run_summary]).to_string(index=False))
     print("\n=== Per-pair timings ===")
     print(pd.DataFrame(run_rows).to_string(index=False))
+    print("\n=== Yahoo 5-minute bar freshness ===")
+    freshness_columns = [
+        "Pair", "LatestYahooBarJST", "LatestYahooBarAgeMinutes",
+        "LatestBarSignal", "LastConfirmedBarJST",
+        "LastConfirmedBarAgeMinutes", "LastConfirmedBarSignal",
+    ]
+    print(pd.DataFrame(run_rows)[freshness_columns].to_string(index=False))
     print("\n=== Yahoo download timings ===")
     print(pd.DataFrame(download_records).to_string(index=False))
     print("\nLINE送信: なし / 履歴CSVの読み書き: なし")
